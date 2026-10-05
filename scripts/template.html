@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{TITLE}}</title>
+<style>
+  :root {
+    --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --tile: #e7e5e4;
+    --overlay: #0c0a09; --btn: rgba(255, 255, 255, .14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --tile: #1c1917; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  header { padding: 28px 16px 8px; max-width: 1400px; margin: 0 auto; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -.02em; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  main { max-width: 1400px; margin: 0 auto; padding: 0 16px 48px; }
+  h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 24px 0 8px; }
+  .grid { display: grid; gap: 3px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  @media (max-width: 520px) { .grid { grid-template-columns: repeat(3, 1fr); gap: 2px; } main { padding: 0 2px 40px; } h2 { margin-left: 14px; } }
+  .tile { position: relative; display: block; aspect-ratio: 1; background: var(--tile); overflow: hidden; }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .25s; }
+  .tile:hover img { transform: scale(1.03); }
+  .badge { position: absolute; top: 6px; left: 6px; font: 600 10px/1 -apple-system, system-ui, sans-serif;
+    letter-spacing: .06em; color: #fff; background: rgba(0,0,0,.45); padding: 3px 5px; border-radius: 4px;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  .empty { color: var(--muted); padding: 40px 0; }
+
+  /* Lightbox */
+  #lb { position: fixed; inset: 0; background: var(--overlay); color: #fff; z-index: 10;
+    display: none; flex-direction: column; }
+  #lb.open { display: flex; }
+  .stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+    touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  .stage img, .stage video { position: absolute; max-width: 100%; max-height: 100%; object-fit: contain;
+    width: 100%; height: 100%; }
+  .stage video { opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .stage video.playing { opacity: 1; }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    font-size: 13px; }
+  .bar .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .75; }
+  .btn { appearance: none; border: 0; background: var(--btn); color: #fff; font: inherit; font-weight: 500;
+    padding: 7px 11px; border-radius: 999px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+  .btn:hover { background: rgba(255,255,255,.24); }
+  .btn[hidden] { display: none; }
+  .live.on { background: #fff; color: #000; }
+  .nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 44px; height: 44px;
+    border-radius: 50%; font-size: 22px; line-height: 1; padding: 0; }
+  .prev { left: 12px; } .next { right: 12px; }
+  .close { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; z-index: 2;
+    width: 40px; height: 40px; padding: 0; border-radius: 50%; font-size: 20px; }
+  @media (hover: none) { .nav { display: none; } }
+  .fmt { font-size: 11px; opacity: .55; letter-spacing: .04em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{TITLE}}</h1>
+  <p>{{COUNT}}</p>
+</header>
+<main>{{GRID}}</main>
+
+<div id="lb" role="dialog" aria-modal="true" aria-label="Photo viewer">
+  <div class="stage">
+    <img alt="">
+    <video playsinline muted preload="none"></video>
+    <button class="btn nav prev" aria-label="Previous">&#8249;</button>
+    <button class="btn nav next" aria-label="Next">&#8250;</button>
+    <button class="btn close" aria-label="Close">&#215;</button>
+  </div>
+  <div class="bar">
+    <button class="btn live" hidden title="Play Live Photo (or press and hold the photo)">LIVE</button>
+    <button class="btn sound" hidden aria-label="Toggle sound">Sound off</button>
+    <span class="name"></span>
+    <span class="fmt"></span>
+    <a class="btn orig" target="_blank" rel="noopener">Original</a>
+  </div>
+</div>
+
+<script>
+const PHOTOS = {{DATA}};
+const $ = (s) => document.querySelector(s);
+const lb = $('#lb'), img = $('.stage img'), vid = $('.stage video'), stage = $('.stage');
+const liveBtn = $('.live'), soundBtn = $('.sound');
+let cur = -1, muted = true;
+
+// Can this browser render HEIC (Safari 17+)? If so we show the untouched original.
+const heicOK = new Promise((res) => {
+  const t = new Image();
+  t.onload = () => res(t.naturalWidth > 0);
+  t.onerror = () => res(false);
+  t.src = 'heic-test.heic';
+});
+const movOK = !!vid.canPlayType('video/quicktime; codecs="hvc1"') || !!vid.canPlayType('video/quicktime; codecs="hev1"');
+
+async function show(i) {
+  cur = (i + PHOTOS.length) % PHOTOS.length;
+  const p = PHOTOS[cur];
+  stopLive();
+  $('.name').textContent = p.name;
+  $('.orig').href = p.orig;
+  liveBtn.hidden = soundBtn.hidden = !p.mp4;
+  vid.removeAttribute('src');
+  if (p.mp4) {
+    vid.src = (movOK && p.mov) ? p.mov : p.mp4;
+    vid.preload = 'auto';
+    playLive(); // like Photos: play the motion once when a Live Photo is opened
+  }
+  history.replaceState(null, '', '#' + cur);
+
+  // Show the generated JPEG immediately, then swap in the original once it has loaded
+  // (HEIC originals only where the browser can render them).
+  const fmt = $('.fmt');
+  img.src = p.large;
+  fmt.textContent = 'JPEG';
+  if (p.heic && !(await heicOK)) return;
+  const o = new Image();
+  o.onload = () => {
+    if (PHOTOS[cur] !== p) return;
+    img.src = p.orig;
+    fmt.textContent = p.heic ? 'HEIC ORIGINAL' : 'ORIGINAL';
+  };
+  o.src = p.orig;
+}
+
+function open(i) { lb.classList.add('open'); document.body.style.overflow = 'hidden'; show(i); }
+function close() {
+  stopLive(); lb.classList.remove('open'); document.body.style.overflow = '';
+  vid.removeAttribute('src'); vid.load(); img.removeAttribute('src');
+  history.replaceState(null, '', location.pathname);
+}
+
+function playLive() {
+  if (!PHOTOS[cur]?.mp4) return;
+  vid.muted = muted; vid.currentTime = 0;
+  vid.play().then(() => { vid.classList.add('playing'); liveBtn.classList.add('on'); }).catch(() => {});
+}
+function stopLive() {
+  vid.pause(); vid.classList.remove('playing'); liveBtn.classList.remove('on');
+}
+vid.addEventListener('ended', stopLive);
+// If the original .mov can't be played after all, fall back to the MP4.
+vid.addEventListener('error', () => {
+  const p = PHOTOS[cur];
+  if (p?.mp4 && !vid.src.endsWith(p.mp4)) { vid.src = p.mp4; }
+});
+
+document.querySelectorAll('.tile').forEach((a) => a.addEventListener('click', (e) => {
+  e.preventDefault(); open(+a.dataset.i);
+}));
+$('.prev').onclick = () => show(cur - 1);
+$('.next').onclick = () => show(cur + 1);
+$('.close').onclick = close;
+liveBtn.onclick = () => (vid.paused ? playLive() : stopLive());
+soundBtn.onclick = () => {
+  muted = !muted; vid.muted = muted; soundBtn.textContent = muted ? 'Sound off' : 'Sound on';
+};
+addEventListener('keydown', (e) => {
+  if (!lb.classList.contains('open')) return;
+  if (e.key === 'Escape') close();
+  else if (e.key === 'ArrowLeft') show(cur - 1);
+  else if (e.key === 'ArrowRight') show(cur + 1);
+  else if (e.key === ' ') { e.preventDefault(); liveBtn.click(); }
+});
+
+// Mouse: hover to play the motion. Touch: press and hold to play, swipe to change photo.
+let press = null;
+stage.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') playLive(); });
+stage.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') stopLive(); });
+stage.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' || e.target.closest('button')) return;
+  press = { x: e.clientX, y: e.clientY, t: setTimeout(() => { press.held = true; playLive(); }, 250) };
+});
+stage.addEventListener('pointermove', (e) => {
+  if (press && !press.held && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) clearTimeout(press.t);
+});
+const release = (e) => {
+  if (!press) return;
+  clearTimeout(press.t);
+  const dx = e.clientX - press.x;
+  if (press.held) stopLive();
+  else if (Math.abs(dx) > 50) show(cur + (dx < 0 ? 1 : -1));
+  press = null;
+};
+stage.addEventListener('pointerup', release);
+stage.addEventListener('pointercancel', release);
+stage.addEventListener('contextmenu', (e) => e.preventDefault());
+
+const start = parseInt(location.hash.slice(1), 10);
+if (start >= 0 && start < PHOTOS.length) open(start);
+</script>
+</body>
+</html>

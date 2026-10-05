@@ -1,0 +1,61 @@
+name: Build gallery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'photos/**'
+      - 'scripts/**'
+      - 'assets/**'
+      - 'package*.json'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A burst of uploads (one commit per photo) queues up; only the latest pending run is kept.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HEIC decoder and ffmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libheif-examples libheif-plugin-libde265 ffmpeg
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Restore processed images
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: img-${{ github.run_id }}
+          restore-keys: img-
+
+      - run: node scripts/build.mjs
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
