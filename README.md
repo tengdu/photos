@@ -5,7 +5,8 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 - `photos/` holds the **untouched originals**: HEIC/JPEG, plus a `.mov` with the same name for Live Photos.
 - On every push, `.github/workflows/pages.yml` runs `scripts/build.mjs`. For each photo it generates **one** image, a 720px WebP preview, which is used in the grids and cards. It also reads the capture time, camera details and GPS, and looks up a place name offline. Then it bundles the site and deploys it to GitHub Pages.
 - The **viewer always shows the original file**, loaded from `raw.githubusercontent.com`. JPEGs, and HEIC in Safari, are displayed directly. Chrome and Edge decode the original HEIC with the hardware HEVC decoder (WebCodecs, ~0.1–0.5 s). Other browsers fall back to libheif (WASM). Live Photos play the original `.mov`: they play once when opened, and again when you press and hold the photo, hover over **LIVE**, or press Space.
-- Views: **Years**, **Months**, **Days** and **All Photos**. Identical files are shown once.
+- Views: **Years**, **Months**, **Days**, **All Photos** (pinch, Ctrl+scroll or −/+ to change the grid size) and a **Map** of photos by place. Press **I** in the viewer for photo info. Identical files are shown once.
+- On iPhone, Safari → Share → **Add to Home Screen** turns the site into an app. A service worker keeps previews, app files and recently viewed originals, so repeat visits open instantly and work offline.
 
 > The repo is public: anyone can download the originals, including the GPS location stored in them.
 

@@ -93,6 +93,7 @@ export class Library {
       const b = e.target.closest('button[data-step]');
       if (b) this.setDensity(this.density + Number(b.dataset.step));
     });
+    this.bindPinch();
     let raf = 0;
     const onScroll = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; this.updateTitle(); }); };
     addEventListener('scroll', onScroll, { passive: true });
@@ -161,13 +162,55 @@ export class Library {
     if (this.subtitle.textContent !== sub) this.subtitle.textContent = sub;
   }
 
-  setDensity(level) {
-    this.density = Math.max(0, Math.min(2, level));
+  // `at` is the screen point to keep steady (the pinch centre); defaults to just below the header.
+  setDensity(level, at) {
+    const next = Math.max(0, Math.min(2, level));
+    if (next === this.density) return;
+    this.density = next;
     try { localStorage.setItem(DENSITY_KEY, String(this.density)); } catch {}
-    // Keep the photo at the top of the screen in place while the grid changes.
-    const anchor = document.elementFromPoint(innerWidth / 2, this.headerHeight() + 20)?.closest('.tile');
-    this.applyDensity();
-    if (anchor) scrollTo(0, anchor.getBoundingClientRect().top + scrollY - this.headerHeight() - 20);
+    const y = at?.y ?? this.headerHeight() + 20;
+    const anchor = document.elementFromPoint(at?.x ?? innerWidth / 2, y)?.closest('.tile');
+    const apply = () => {
+      this.applyDensity();
+      if (anchor) scrollTo(0, anchor.getBoundingClientRect().top + scrollY - (y - 10));
+    };
+    if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) document.startViewTransition(apply);
+    else apply();
+  }
+
+  // Pinch (touch), trackpad pinch / Ctrl+scroll (desktop) change the All Photos grid density.
+  bindPinch() {
+    const active = () => this.view === 'all' && !this.root.hidden;
+    let start = 0;
+    let center = null;
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    this.root.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 2 || !active()) return;
+      start = dist(e.touches);
+      center = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
+    }, { passive: true });
+    this.root.addEventListener('touchmove', (e) => {
+      if (e.touches.length !== 2 || !start || !active()) return;
+      e.preventDefault(); // no page zoom while pinching the grid
+      const ratio = dist(e.touches) / start;
+      if (ratio > 1.3 || ratio < 0.77) {
+        this.setDensity(this.density + (ratio > 1 ? -1 : 1), center);
+        start = dist(e.touches);
+      }
+    }, { passive: false });
+    this.root.addEventListener('touchend', (e) => { if (e.touches.length < 2) start = 0; });
+    // Safari (iOS/macOS) also sends its own gesture events; stop them from zooming the page.
+    this.root.addEventListener('gesturestart', (e) => active() && e.preventDefault());
+    let wheel = 0;
+    this.root.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey || !active()) return;
+      e.preventDefault();
+      wheel += e.deltaY;
+      if (Math.abs(wheel) > 60) {
+        this.setDensity(this.density + (wheel > 0 ? 1 : -1), { x: e.clientX, y: e.clientY });
+        wheel = 0;
+      }
+    }, { passive: false });
   }
 
   applyDensity() {

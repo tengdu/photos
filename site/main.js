@@ -13,10 +13,9 @@ async function boot() {
   // Expose the header height to CSS (the map sits behind the translucent header).
   new ResizeObserver(([e]) => document.documentElement.style.setProperty('--top-h', `${e.target.offsetHeight}px`)).observe($('.top'));
   try {
-    const res = await fetch($('link[data-photos]').href);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    state.photos = prepare(await res.json());
+    state.photos = prepare(await loadPhotoList());
   } catch (e) {
+    if (e.message === 'reloading') return;
     $('#view').innerHTML = `<p class="empty">Couldn't load the photo list.<br><span>${String(e.message)}</span></p>`;
     return;
   }
@@ -32,6 +31,32 @@ async function boot() {
   document.addEventListener('click', onClick);
   addEventListener('hashchange', route);
   route();
+  if ('serviceWorker' in navigator && isSecureContext) {
+    addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+}
+
+// The page itself may be up to 10 minutes stale (GitHub Pages caching), so ask for the
+// current version, uncached, while the preloaded photo list downloads.
+async function loadPhotoList() {
+  const preloaded = $('link[data-photos]').href;
+  const [list, latest] = await Promise.all([
+    fetch(preloaded).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+    fetch('version.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+  ]);
+  if (!latest) return list;
+  const appNow = new URL(import.meta.url).pathname.split('/').pop();
+  if (!latest.app.endsWith(appNow)) {
+    let reloaded = false;
+    try { reloaded = sessionStorage.getItem('photos.reloaded') === latest.app; sessionStorage.setItem('photos.reloaded', latest.app); } catch {}
+    if (!reloaded) {
+      location.reload();
+      throw new Error('reloading');
+    }
+  }
+  if (new URL(latest.data, document.baseURI).href === preloaded) return list;
+  const res = await fetch(latest.data);
+  return res.ok ? res.json() : list;
 }
 
 function prepare(data) {

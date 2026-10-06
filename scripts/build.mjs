@@ -257,7 +257,27 @@ async function bundle(dataVersion) {
     .replace('__CSS__', rel(out.cssBundle))
     .replace('__PHOTOS__', `photos.json?v=${dataVersion}`);
   await writeFile(path.join(OUT, 'index.html'), html);
+  // GitHub Pages lets browsers cache index.html for 10 minutes; the page checks this file
+  // (never cached) to pick up new photos or a new app version right away.
+  await writeFile(path.join(OUT, 'version.json'), JSON.stringify({ app: rel(js), data: `photos.json?v=${dataVersion}` }));
   await copyFile('assets/heic-test.heic', path.join(OUT, 'heic-test.heic'));
+
+  // Installable web app: icons, manifest, and a service worker for instant repeat visits.
+  const icon = await readFile('site/icon.svg');
+  await writeFile(path.join(OUT, 'icon.svg'), icon);
+  for (const [name, size] of [['icon-192.png', 192], ['icon-512.png', 512], ['apple-touch-icon.png', 180]]) {
+    await sharp(icon, { density: 300 }).resize(size, size).png().toFile(path.join(OUT, name));
+  }
+  await writeFile(path.join(OUT, 'manifest.webmanifest'), JSON.stringify({
+    name: 'Photos', short_name: 'Photos', start_url: './', scope: './', display: 'standalone',
+    background_color: '#000000', theme_color: '#000000',
+    icons: [
+      { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
+      { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+    ],
+  }));
+  const sw = (await readFile('site/sw.js', 'utf8')).replace('__PV__', path.basename(CACHE));
+  await writeFile(path.join(OUT, 'sw.js'), `// build ${dataVersion}\n${sw}`);
   const sizes = Object.entries({ ...app.metafile.outputs, ...worker.metafile.outputs })
     .map(([f, o]) => `${rel(f)} ${(o.bytes / 1024).toFixed(0)} KB`);
   console.log(`bundle: ${sizes.join(', ')}, ${wasmName} ${(wasm.length / 1024).toFixed(0)} KB`);
