@@ -131,10 +131,12 @@ async function collect(hashes) {
   }
   // Identical files (the same photo uploaded twice) are shown once; prefer the copy with motion.
   const byId = new Map();
+  const seen = new Set();
   for (const e of byStem.values()) {
     if (!e.still) { console.log(`skip ${e.motion}: videos aren't supported yet`); continue; }
     const { size } = await stat(e.still);
     const key = `${e.still}|${size}`;
+    seen.add(key);
     e.id = hashes[key] ??= sha1(await readFile(e.still)).slice(0, 16);
     const prev = byId.get(e.id);
     if (prev) {
@@ -145,7 +147,22 @@ async function collect(hashes) {
       byId.set(e.id, e);
     }
   }
+  for (const key of Object.keys(hashes)) if (!seen.has(key)) delete hashes[key];
   return [...byId.values()];
+}
+
+// Remove cached previews/metadata of photos that are no longer in the repo,
+// so deleted photos don't live on in the CI cache.
+async function pruneCache(ids) {
+  let removed = 0;
+  for (const f of await readdir(CACHE)) {
+    const m = /^([0-9a-f]{16})\.(webp|json)$/.exec(f);
+    if (m && !ids.has(m[1])) {
+      await rm(path.join(CACHE, f));
+      removed++;
+    }
+  }
+  if (removed) console.log(`cache: removed ${removed} files of deleted photos`);
 }
 
 // ---------- Per-photo processing (cached by content hash) ----------
@@ -295,7 +312,9 @@ async function main() {
 
   const items = [];
   let fresh = 0;
-  for (const item of await collect(hashes)) {
+  const collected = await collect(hashes);
+  await pruneCache(new Set(collected.map((c) => c.id)));
+  for (const item of collected) {
     try {
       const cached = await exists(path.join(CACHE, `${item.id}.json`));
       const meta = await processItem(item, tmpDir);
