@@ -70,8 +70,10 @@ async function load(p, priority) {
       // The browser can show this format itself (JPEG/PNG…, or HEIC in Safari): point an <img>
       // straight at the original's URL. The browser streams, caches and decodes it natively,
       // with no copy of the file in JavaScript memory.
-      const img = await loadImage(p.src, priority);
-      Object.assign(t, { downloaded: performance.now(), decoded: performance.now(), method: 'native' });
+      const img = await loadImage(p.src, priority, t);
+      t.decoded = performance.now();
+      t.downloaded ??= t.decoded;
+      t.method = 'native';
       return { img };
     }
     const blob = await download(p, priority);
@@ -86,17 +88,27 @@ async function load(p, priority) {
   }
 }
 
-function loadImage(src, priority) {
+function loadImage(src, priority, t) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.decoding = 'async';
-    if (priority !== 'high') img.fetchPriority = 'low';
-    // Decode before resolving, so swapping it in for the preview doesn't stall the animation.
-    img.onload = () => img.decode().catch(() => {}).then(() => resolve(img));
+    // An image that isn't in the page yet starts at low priority and would queue behind the
+    // grid's previews; the photo being opened must go first.
+    img.fetchPriority = priority === 'high' ? 'high' : 'low';
+    img.onload = () => {
+      // When the download finished (from Resource Timing; works cross-origin without extra headers).
+      const entry = performance.getEntriesByName(img.src, 'resource').pop();
+      if (entry?.responseEnd && entry.startTime >= t.start - 50) t.downloaded = entry.responseEnd;
+      // Decode before resolving, so swapping it in for the preview doesn't stall the animation.
+      img.decode().catch(() => {}).then(() => resolve(img));
+    };
     img.onerror = () => reject(new Error(`Couldn't load ${src}`));
     img.src = src;
   });
 }
+
+// The grid's previews can fill the Resource Timing buffer; keep room for the originals.
+performance.addEventListener?.('resourcetimingbufferfull', () => performance.clearResourceTimings());
 
 async function download(p, priority) {
   const res = await fetch(p.src, { priority });

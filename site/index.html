@@ -14,6 +14,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Photos">
+<!-- Originals come from here: <img> loads (Safari, JPEG) and fetch() loads (Chrome HEIC) use separate connections. -->
+<link rel="preconnect" href="https://raw.githubusercontent.com">
 <link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin>
 <link rel="preload" href="__PHOTOS__" as="fetch" crossorigin data-photos>
 <link rel="stylesheet" href="__CSS__">

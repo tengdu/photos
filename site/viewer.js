@@ -149,6 +149,7 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
 // One line per original shown: how long download / decode / display took.
 const DEBUG = new URLSearchParams(location.search).has('debug');
 const openedAt = new Map(); // photo id -> when it became the photo on screen
+const debugLines = new Map(); // photo id -> timing summary shown in the status bar with ?debug
 
 function logShown(p) {
   const t = timing(p.id);
@@ -156,15 +157,16 @@ function logShown(p) {
   if (!t || !opened || t.logged === opened) return;
   t.logged = opened;
   const s = (a, b) => `${(Math.max(0, b - a) / 1000).toFixed(2)} s`;
-  const work = t.method === 'native'
-    ? `browser loaded + decoded it in ${s(t.start, t.decoded)}`
-    : `download ${s(t.start, t.downloaded)}, ${t.method} decode ${s(t.downloaded, t.decoded)}`;
+  const mbps = t.downloaded > t.start ? ` = ${(p.size / 1e6 / ((t.downloaded - t.start) / 1000)).toFixed(1)} MB/s` : '';
+  const work = `download ${s(t.start, t.downloaded)} (${(p.size / 1e6).toFixed(1)} MB${mbps}), `
+    + `${t.method === 'native' ? 'browser' : t.method} decode ${s(t.downloaded, t.decoded)}`;
   const line = t.decoded <= opened
     ? `ready before it was opened (preloaded; ${work})`
     : `shown ${s(opened, performance.now())} after opening (${work})`;
   console.debug(`[photos] ${p.name}: ${line}`);
-  // With ?debug in the URL, show the numbers in the status bar (handy on a phone).
-  if (DEBUG && ui?.status && pswp?.currSlide?.data.photo === p) ui.status.textContent = `${t.method}: ${line}`;
+  // With ?debug in the URL, the status bar shows the numbers (handy on a phone).
+  debugLines.set(p.id, `${t.method}: ${line}`);
+  if (pswp?.currSlide?.data.photo === p) renderStatus(p);
 }
 
 export function closeViewer() {
@@ -380,7 +382,8 @@ function renderStatus(p) {
   const info = `${fmt} · ${p.w} × ${p.h} · ${fileSize(p.size)}`;
   ui.status.classList.toggle('is-loading', s.state === 'loading');
   ui.status.classList.toggle('is-error', s.state === 'error');
-  if (s.state === 'done') ui.status.innerHTML = `<b>Original</b> · ${info}`;
+  if (s.state === 'done' && DEBUG && debugLines.has(p.id)) ui.status.textContent = debugLines.get(p.id);
+  else if (s.state === 'done') ui.status.innerHTML = `<b>Original</b> · ${info}`;
   else if (s.state === 'error') ui.status.textContent = 'Original unavailable in this browser';
   else if (!s.loaded) {
     ui.status.innerHTML = '<i class="ring spin"></i> Loading original…'; // native loads report no progress
