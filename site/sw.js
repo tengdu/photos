@@ -28,6 +28,9 @@ self.addEventListener('fetch', (e) => {
       e.respondWith(cacheFirst(req, PREVIEWS));
     }
   } else if (url.hostname === 'raw.githubusercontent.com') {
+    // Originals shown directly in <img> (Safari, JPEG) are left to the browser: routing them
+    // through the worker is slow on iOS. Originals fetched for in-page decoding are kept.
+    if (req.destination === 'image') return;
     e.respondWith(cacheFirst(req, 'originals', MAX_ORIGINALS));
   }
 });

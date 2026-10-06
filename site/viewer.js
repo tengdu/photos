@@ -103,12 +103,14 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
   viewer.on('change', () => {
     stopAllLive();
     const p = photos[viewer.currIndex];
+    if (p) openedAt.set(p.id, performance.now());
     // A neighbour that was waiting as a background prefetch is needed now: start it.
     if (p && !peek(p.id)) loadOriginal(p, { priority: 'high' }).catch(() => {});
     onChange(viewer.currIndex);
     updateUI();
     renderInfo();
     activateLive();
+    if (p && peek(p.id)) logShown(p);
   });
   viewer.on('tapAction', (e) => {
     if (press?.held) e.preventDefault();
@@ -145,13 +147,24 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
 }
 
 // One line per original shown: how long download / decode / display took.
+const DEBUG = new URLSearchParams(location.search).has('debug');
+const openedAt = new Map(); // photo id -> when it became the photo on screen
+
 function logShown(p) {
   const t = timing(p.id);
-  if (!t || t.logged) return;
-  t.logged = true;
-  const ms = (a, b) => (a && b ? Math.round(b - a) : '?');
-  console.debug(`[photos] ${p.name}: shown ${ms(t.start, performance.now())} ms after request `
-    + `(download ${ms(t.start, t.downloaded)} ms, ${t.method || 'native'} decode ${ms(t.downloaded, t.decoded)} ms)`);
+  const opened = openedAt.get(p.id);
+  if (!t || !opened || t.logged === opened) return;
+  t.logged = opened;
+  const s = (a, b) => `${(Math.max(0, b - a) / 1000).toFixed(2)} s`;
+  const work = t.method === 'native'
+    ? `browser loaded + decoded it in ${s(t.start, t.decoded)}`
+    : `download ${s(t.start, t.downloaded)}, ${t.method} decode ${s(t.downloaded, t.decoded)}`;
+  const line = t.decoded <= opened
+    ? `ready before it was opened (preloaded; ${work})`
+    : `shown ${s(opened, performance.now())} after opening (${work})`;
+  console.debug(`[photos] ${p.name}: ${line}`);
+  // With ?debug in the URL, show the numbers in the status bar (handy on a phone).
+  if (DEBUG && ui?.status && pswp?.currSlide?.data.photo === p) ui.status.textContent = `${t.method}: ${line}`;
 }
 
 export function closeViewer() {
@@ -160,11 +173,10 @@ export function closeViewer() {
 
 async function mount(wrap, p, result) {
   let el;
-  if (result.url) {
-    el = new Image();
+  if (result.img) {
+    // Already loaded and decoded; a clone shares the decoded image if it's shown twice.
+    el = result.img.isConnected ? result.img.cloneNode() : result.img;
     el.alt = p.name;
-    el.src = result.url;
-    await el.decode().catch(() => {});
   } else {
     el = document.createElement('canvas');
     el.width = result.width;
@@ -370,7 +382,9 @@ function renderStatus(p) {
   ui.status.classList.toggle('is-error', s.state === 'error');
   if (s.state === 'done') ui.status.innerHTML = `<b>Original</b> · ${info}`;
   else if (s.state === 'error') ui.status.textContent = 'Original unavailable in this browser';
-  else {
+  else if (!s.loaded) {
+    ui.status.innerHTML = '<i class="ring spin"></i> Loading original…'; // native loads report no progress
+  } else {
     const pct = s.total ? Math.min(99, Math.floor((100 * s.loaded) / s.total)) : 0;
     ui.status.innerHTML = `<i class="ring" style="--p:${pct}"></i> ${s.loaded >= s.total && s.total ? 'Decoding original…' : `Loading original… ${pct}%`}`;
   }

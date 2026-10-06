@@ -4,7 +4,6 @@
 /* global __HEIC_WORKER__ */
 
 const HEIF = new Set(['heic', 'heif']);
-const MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif' };
 const LIMIT = (navigator.deviceMemory || 4) >= 8 ? 6 : 3;
 
 export const progress = new EventTarget();
@@ -54,7 +53,6 @@ function trim() {
     if (cache.size <= LIMIT) break;
     if (!entry.result) continue; // still loading
     cache.delete(id);
-    if (entry.result.url) URL.revokeObjectURL(entry.result.url);
     entry.result.bitmap?.close();
   }
 }
@@ -68,20 +66,36 @@ async function load(p, priority) {
   const t = { start: performance.now() };
   timings.set(p.id, t);
   try {
+    if (!(await needsDecode(p))) {
+      // The browser can show this format itself (JPEG/PNG…, or HEIC in Safari): point an <img>
+      // straight at the original's URL. The browser streams, caches and decodes it natively,
+      // with no copy of the file in JavaScript memory.
+      const img = await loadImage(p.src, priority);
+      Object.assign(t, { downloaded: performance.now(), decoded: performance.now(), method: 'native' });
+      return { img };
+    }
     const blob = await download(p, priority);
     t.downloaded = performance.now();
-    if (await needsDecode(p)) {
-      const decoded = await decodeHeic(await blob.arrayBuffer());
-      Object.assign(t, { decoded: performance.now(), method: decoded.method });
-      return { ...decoded, bytes: blob.size };
-    }
-    t.decoded = t.downloaded; // the browser decodes it when it is displayed
-    return { url: URL.createObjectURL(new Blob([blob], { type: MIME[p.fmt] || '' })), bytes: blob.size };
+    const decoded = await decodeHeic(await blob.arrayBuffer());
+    Object.assign(t, { decoded: performance.now(), method: decoded.method });
+    return { ...decoded, bytes: blob.size };
   } finally {
     if (priority === 'high' && --highPriority === 0) {
       for (const start of [...waiting.values()]) start();
     }
   }
+}
+
+function loadImage(src, priority) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.decoding = 'async';
+    if (priority !== 'high') img.fetchPriority = 'low';
+    // Decode before resolving, so swapping it in for the preview doesn't stall the animation.
+    img.onload = () => img.decode().catch(() => {}).then(() => resolve(img));
+    img.onerror = () => reject(new Error(`Couldn't load ${src}`));
+    img.src = src;
+  });
 }
 
 async function download(p, priority) {
