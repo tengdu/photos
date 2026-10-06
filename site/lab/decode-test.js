@@ -74,11 +74,21 @@ async function webCodecsTest() {
     const heif = parseHeif(bytes);
     const tiles = refsFrom(heif, 'dimg', heif.primaryId);
     const first = itemProps(heif, tiles[0]);
-    const codec = hevcCodecString(first.hvcC.record);
-    const config = { codec, description: first.hvcC.record, codedWidth: first.ispe.width, codedHeight: first.ispe.height };
-    const { supported } = await VideoDecoder.isConfigSupported(config);
-    if (!supported) {
-      li.innerHTML = `<b>5. WebCodecs</b> HEVC (${codec}) not supported`;
+    // The tiles are "Main Still Picture" (profile 3), a subset of Main: if the exact profile is
+    // rejected, try the same stream described as Main.
+    const own = hevcCodecString(first.hvcC.record);
+    const level = own.split('.')[3];
+    const candidates = [own, `hvc1.1.6.${level}.B0`, 'hvc1.1.6.L120.B0', `hev1.1.6.${level}.B0`];
+    let config = null;
+    const tried = [];
+    for (const codec of candidates) {
+      const c = { codec, description: first.hvcC.record, codedWidth: first.ispe.width, codedHeight: first.ispe.height };
+      const ok = (await VideoDecoder.isConfigSupported(c).catch(() => ({ supported: false }))).supported;
+      tried.push(`${codec} ${ok ? '✓' : '✗'}`);
+      if (ok) { config = c; break; }
+    }
+    if (!config) {
+      li.innerHTML = `<b>5. WebCodecs</b> HEVC not supported (${tried.join(', ')})`;
       return;
     }
     const grid = itemData(heif, heif.primaryId);
@@ -114,20 +124,48 @@ async function webCodecsTest() {
     decoder.close();
     const px = bands[0].ctx.getImageData(Math.floor(W / 2), 10, 1, 1).data;
     const done = performance.now();
-    li.innerHTML = `<b>5. WebCodecs</b> download ${sec(downloaded - t0)}, decode ${drawn}/${tiles.length} tiles into ${bands.length} canvases ${sec(done - downloaded)} → <b>${sec(done - t0)}</b> (pixel ${px[0]},${px[1]},${px[2]})`;
+    li.innerHTML = `<b>5. WebCodecs</b> [${tried.join(', ')}] download ${sec(downloaded - t0)}, decode ${drawn}/${tiles.length} tiles into ${bands.length} canvases ${sec(done - downloaded)} → <b>${sec(done - t0)}</b> (pixel ${px[0]},${px[1]},${px[2]})`;
   } catch (e) {
     li.innerHTML = `<b>5. WebCodecs</b> failed: ${e.message}`;
   }
 }
 
+// Test 6: draw the loaded original into a screen-sized canvas. drawImage() can't return before
+// the image is decoded, so this measures what showing it at screen size really costs.
+async function drawAtScreenSize() {
+  const li = row('6. Draw at screen size (what showing it costs)', 'running…');
+  const img = new Image();
+  img.decoding = 'async';
+  img.style.width = '160px';
+  stage.append(img);
+  try {
+    const t0 = performance.now();
+    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(new Error('load failed')); img.src = fresh('draw'); });
+    const loaded = performance.now();
+    const w = Math.round(screen.width * devicePixelRatio);
+    const h = Math.round((w * img.naturalHeight) / img.naturalWidth);
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    c.getContext('2d').drawImage(img, 0, 0, w, h);
+    const px = c.getContext('2d').getImageData(w >> 1, h >> 1, 1, 1).data;
+    const drawn = performance.now();
+    li.innerHTML = `<b>6. Draw at screen size</b> (${w}×${h}) download ${sec(loaded - t0)}, draw ${sec(drawn - loaded)} → <b>${sec(drawn - t0)}</b> (pixel ${px[0]},${px[1]},${px[2]})`;
+  } catch (e) {
+    li.innerHTML = `<b>6. Draw at screen size</b> failed: ${e.message}`;
+  }
+  img.remove();
+}
+
 const go = document.getElementById('go');
 go.onclick = async () => {
   go.disabled = true;
-  await imgTest('1. Detached image + decode() (what the site does now)', { attach: false });
+  await imgTest('1. Detached image + decode() (how the site did it before)', { attach: false });
   await imgTest('2. Image in the page + decode()', { attach: true });
   await imgTest('3. Image in the page, HDR off (dynamic-range-limit: standard)', { attach: true, sdr: true });
   await imgTest('4. Image in the page, no decode() (shown when ready)', { attach: true, decode: false });
   await webCodecsTest();
+  await drawAtScreenSize();
   row('Done', 'please send a screenshot of this page');
   go.disabled = false;
 };

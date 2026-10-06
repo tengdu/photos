@@ -159,8 +159,9 @@ function logShown(p) {
   const s = (a, b) => `${(Math.max(0, b - a) / 1000).toFixed(2)} s`;
   const mbps = t.downloaded > t.start ? ` = ${(p.size / 1e6 / ((t.downloaded - t.start) / 1000)).toFixed(1)} MB/s` : '';
   const work = `download ${s(t.start, t.downloaded)} (${(p.size / 1e6).toFixed(1)} MB${mbps}), `
-    + `${t.method === 'native' ? 'browser' : t.method} decode ${s(t.downloaded, t.decoded)}`;
-  const line = t.decoded <= opened
+    + (t.method === 'native' ? 'then drawn by the browser at screen size' : `${t.method} decode ${s(t.downloaded, t.decoded)}`);
+  const ready = t.decoded ?? t.downloaded;
+  const line = ready <= opened
     ? `ready before it was opened (preloaded; ${work})`
     : `shown ${s(opened, performance.now())} after opening (${work})`;
   console.debug(`[photos] ${p.name}: ${line}`);
@@ -176,7 +177,13 @@ export function closeViewer() {
 async function mount(wrap, p, result) {
   let el;
   if (result.img) {
-    // Already loaded and decoded; a clone shares the decoded image if it's shown twice.
+    // The browser paints the original as soon as it has decoded it at screen size; until then
+    // the preview underneath stays visible (no black flash once PhotoSwipe drops its placeholder).
+    const preview = new Image();
+    preview.className = 'orig-media orig-under';
+    preview.alt = '';
+    preview.src = p.thumb;
+    wrap.append(preview);
     el = result.img.isConnected ? result.img.cloneNode() : result.img;
     el.alt = p.name;
   } else {

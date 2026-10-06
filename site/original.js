@@ -71,8 +71,7 @@ async function load(p, priority) {
       // straight at the original's URL. The browser streams, caches and decodes it natively,
       // with no copy of the file in JavaScript memory.
       const img = await loadImage(p.src, priority, t);
-      t.decoded = performance.now();
-      t.downloaded ??= t.decoded;
+      t.downloaded ??= performance.now();
       t.method = 'native';
       return { img };
     }
@@ -99,8 +98,9 @@ function loadImage(src, priority, t) {
       // When the download finished (from Resource Timing; works cross-origin without extra headers).
       const entry = performance.getEntriesByName(img.src, 'resource').pop();
       if (entry?.responseEnd && entry.startTime >= t.start - 50) t.downloaded = entry.responseEnd;
-      // Decode before resolving, so swapping it in for the preview doesn't stall the animation.
-      img.decode().catch(() => {}).then(() => resolve(img));
+      // No img.decode() here: it forces a full-resolution decode (about 4 s for 24 MP on an
+      // iPhone). Shown on the page, the browser decodes just the resolution the screen needs.
+      resolve(img);
     };
     img.onerror = () => reject(new Error(`Couldn't load ${src}`));
     img.src = src;
