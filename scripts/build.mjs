@@ -88,10 +88,15 @@ async function collect() {
     if (!e.still) { console.warn(`skip ${e.motion}: video without a still photo`); continue; }
     e.id = createHash('sha1').update(e.still).digest('hex').slice(0, 16);
     e.stem = stem;
+    // Uploads are named [YYYY/MM/]YYYYMMDD-HHmmss-*; sort and group by that stamp,
+    // falling back to the YYYY/MM folder, so the folder is optional.
+    const stamp = path.basename(e.still).match(/^(\d{4})(\d{2})\d{2}-\d{6}/);
+    const folder = e.still.match(/^photos\/(\d{4})\/(\d{2})\//);
+    e.group = stamp ? `${stamp[1]}-${stamp[2]}` : folder ? `${folder[1]}-${folder[2]}` : 'Other';
+    e.sortKey = `${stamp ? stamp[0] : '0'}|${e.still}`;
     items.push(e);
   }
-  // Uploads are named photos/YYYY/MM/YYYYMMDD-HHmmss-*, so path order is upload order.
-  return items.sort((a, b) => (a.still < b.still ? 1 : -1));
+  return items.sort((a, b) => (a.sortKey < b.sortKey ? 1 : -1));
 }
 
 async function main() {
@@ -111,10 +116,9 @@ async function main() {
       }
       const copy = [`${item.id}-t.jpg`, `${item.id}-l.jpg`, ...(motion ? [`${item.id}.mp4`] : [])];
       for (const f of copy) await copyFile(path.join(CACHE, f), path.join(OUT, 'm', f));
-      const m = item.still.match(/^photos\/(\d{4})\/(\d{2})\//);
       photos.push({
         name: path.basename(item.still),
-        group: m ? `${m[1]}-${m[2]}` : 'Other',
+        group: item.group,
         w: meta.w, h: meta.h,
         thumb: `m/${item.id}-t.jpg`,
         large: `m/${item.id}-l.jpg`,

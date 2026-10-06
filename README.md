@@ -25,7 +25,7 @@ Add these actions in order (blue words are the variables you tap to insert):
 | # | Action | Settings |
 |---|---|---|
 | 1 | **Text** | paste your token → then **Set Variable** `Token` |
-| 2 | **Format Date** | Date: *Current Date*, Format: *Custom* `yyyy/MM` → **Set Variable** `Dir` |
+| 2 | **Format Date** *(optional)* | Date: *Current Date*, Format: *Custom* `yyyy/MM` → **Set Variable** `Dir`. Sorts the repo into month folders; skip it to keep things simple |
 | 3 | **Format Date** | Date: *Current Date*, Format: *Custom* `yyyyMMdd-HHmmss` → **Set Variable** `Stamp` |
 | 4 | **Repeat with Each** | item in *Shortcut Input* |
 | 5 | ↳ **Get Details of Files** | *File Extension* of *Repeat Item* → **Change Case** to *lowercase* → **Set Variable** `Ext` |
@@ -36,7 +36,8 @@ Add these actions in order (blue words are the variables you tap to insert):
 
 Step 8, **Get Contents of URL**:
 
-- URL: `https://api.github.com/repos/tengdu/photos/contents/photos/`**Dir**`/`**Stamp**`-`**Name**`.`**Ext**
+- URL: `https://api.github.com/repos/tengdu/photos/contents/photos/`**Stamp**`-`**Name**`.`**Ext**
+  (or with month folders: `…/contents/photos/`**Dir**`/`**Stamp**`-`**Name**`.`**Ext**)
 - Method: **PUT**
 - Headers: `Authorization` = `Bearer `**Token**, `Accept` = `application/vnd.github+json`
 - Request Body: **JSON**, with `message` (Text) = `Add `**Name** and `content` (Text) = **Base64 Encoded**
@@ -45,6 +46,17 @@ Step 8, **Get Contents of URL**:
 
 After step 8, still inside the loop, add **Encode Media** on *Repeat Item*. Then repeat steps 7 and 8 on its output, using `.mov` as the extension in the URL. The still and the `.mov` must have the same name (`<Stamp>-<Name>`) so the gallery pairs them.
 If **Encode Media** shows an error for normal (non-Live) photos, move these actions into a separate shortcut, **Upload Live Photos**, that you only use for Live Photos.
+
+### Troubleshooting
+
+| Response | Meaning |
+|---|---|
+| `404 Not Found` | Method is still **GET**, or the URL is wrong (e.g. missing `repos/`, wrong repo name), or the token has no access to `tengdu/photos` |
+| `422 path contains a malformed path component` | A variable in the URL is empty, so the path has `//`. Usually `Dir`: check that its Format Date really uses the custom format, or remove `Dir` from the URL |
+| `422 … "sha" wasn't supplied` | A file with that exact name already exists |
+| `401 Bad credentials` | Token is wrong or expired |
+
+To see the URL the Shortcut actually builds, add a **Text** action containing the same URL, followed by **Quick Look**, just before **Get Contents of URL**. Also make sure the URL has no line breaks: GitHub accepts them silently and creates oddly named files.
 
 ## 3. Use it
 
