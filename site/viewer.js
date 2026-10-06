@@ -157,13 +157,13 @@ function logShown(p) {
   if (!t || !opened || t.logged === opened) return;
   t.logged = opened;
   const s = (a, b) => `${(Math.max(0, b - a) / 1000).toFixed(2)} s`;
-  const mbps = t.downloaded > t.start ? ` = ${(p.size / 1e6 / ((t.downloaded - t.start) / 1000)).toFixed(1)} MB/s` : '';
-  const work = `download ${s(t.start, t.downloaded)} (${(p.size / 1e6).toFixed(1)} MB${mbps}), `
-    + (t.method === 'native' ? 'then drawn by the browser at screen size' : `${t.method} decode ${s(t.downloaded, t.decoded)}`);
+  const mbps = t.downloaded > t.start ? `, ${(p.size / 1e6 / ((t.downloaded - t.start) / 1000)).toFixed(1)} MB/s` : '';
+  const work = `download ${s(t.start, t.downloaded)} (${(p.size / 1e6).toFixed(1)} MB${mbps}) · `
+    + (t.method === 'native' ? 'browser draws it' : `decode ${s(t.downloaded, t.decoded)}`);
   const ready = t.decoded ?? t.downloaded;
   const line = ready <= opened
-    ? `ready before it was opened (preloaded; ${work})`
-    : `shown ${s(opened, performance.now())} after opening (${work})`;
+    ? `preloaded · ${work}`
+    : `shown in ${s(opened, performance.now())} · ${work}`;
   console.debug(`[photos] ${p.name}: ${line}`);
   // With ?debug in the URL, the status bar shows the numbers (handy on a phone).
   debugLines.set(p.id, `${t.method}: ${line}`);
@@ -329,6 +329,7 @@ function registerUI() {
     appendTo: 'root',
     onInit: (el) => {
       el.classList.add('v-bar');
+      if (DEBUG) el.classList.add('v-debug'); // let the timing line wrap instead of being cut off
       el.innerHTML = `
         <button class="v-btn v-live" type="button" title="Play Live Photo (Space) — or press and hold the photo">${LIVE_ICON}<span>LIVE</span></button>
         <button class="v-btn v-sound" type="button" aria-pressed="false" title="Sound for Live Photos">${MUTED_ICON}</button>

@@ -302,6 +302,7 @@ button { font: inherit; color: inherit; }
   font-variant-numeric: tabular-nums;
 }
 .v-status b { color: #fff; font-weight: 600; }
+.v-debug .v-status { white-space: normal; text-align: left; font-size: 11.5px; line-height: 1.3; }
 .v-status.is-error { color: #ffb4a8; }
 .ring {
   --p: 0;
