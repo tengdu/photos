@@ -2,15 +2,14 @@
 // preview is only the placeholder while the original downloads/decodes.
 import PhotoSwipe from 'photoswipe';
 import 'photoswipe/style.css';
-import { loadOriginal, peek, progress } from './original.js';
+import { loadOriginal, peek, progress, timing } from './original.js';
 import { takenLabel, placeLabel, fileSize, megapixels, exposure } from './format.js';
 import { loadMaplibre, mapStyle } from './maplib.js';
 
 const saveData = !!navigator.connection?.saveData;
 const finePointer = matchMedia('(hover: hover) and (pointer: fine)');
 const status = new Map(); // id -> { state: 'loading' | 'done' | 'error', loaded, total }
-let pswp = null;
-let closing = false;
+let pswp = null; // the current viewer instance
 let pendingOpen = null;
 let soundOn = false;
 let infoOpen = false;
@@ -18,10 +17,11 @@ let ui = null;
 let mini = null; // { map, marker } for the Info panel
 const PANEL_W = 340;
 
-export const isOpen = () => !!pswp && !closing;
+const closingViewers = new WeakSet();
+export const isOpen = () => !!pswp && !closingViewers.has(pswp);
 
 export function openViewer(args) {
-  if (pswp && closing) {
+  if (pswp && closingViewers.has(pswp)) {
     pendingOpen = args; // open again once the closing animation has finished
     return;
   }
@@ -34,7 +34,7 @@ export function openViewer(args) {
 
 function create({ photos, index, thumbFor, onChange, onClosed }) {
   const dpr = window.devicePixelRatio || 1;
-  pswp = new PhotoSwipe({
+  const viewer = new PhotoSwipe({
     dataSource: photos.map((p) => ({ src: p.src, msrc: p.thumb, width: p.w, height: p.h, alt: p.name, thumbCropped: true, photo: p })),
     index,
     bgOpacity: 1,
@@ -62,13 +62,14 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
       return pad;
     },
   });
+  pswp = viewer;
 
   // Always show the preview while the original loads (PhotoSwipe only does it for the first slide).
-  pswp.addFilter('placeholderSrc', (src, content) => content.data.msrc || src);
-  pswp.addFilter('thumbEl', (el, data) => thumbFor(data.photo.id) || el);
-  pswp.addFilter('contentErrorElement', (el, content) => errorElement(content.data.photo));
+  viewer.addFilter('placeholderSrc', (src, content) => content.data.msrc || src);
+  viewer.addFilter('thumbEl', (el, data) => thumbFor(data.photo.id) || el);
+  viewer.addFilter('contentErrorElement', (el, content) => errorElement(content.data.photo));
 
-  pswp.on('contentLoad', (e) => {
+  viewer.on('contentLoad', (e) => {
     const { content } = e;
     const p = content.data.photo;
     if (!p) return;
@@ -77,7 +78,7 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
     wrap.className = 'pswp__img orig';
     content.element = wrap;
     content.state = 'loading';
-    const current = content.index === pswp.currIndex;
+    const current = content.index === viewer.currIndex;
     if (!peek(p.id)) setStatus(p.id, { state: 'loading', loaded: 0, total: p.size });
     loadOriginal(p, { priority: current ? 'high' : 'low' })
       .then((result) => mount(wrap, p, result))
@@ -85,7 +86,10 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
         setStatus(p.id, { state: 'done' });
         if (content.element !== wrap) return;
         content.onLoaded();
-        if (pswp?.currSlide?.content === content) activateLive();
+        if (viewer.currSlide?.content === content) {
+          logShown(p);
+          activateLive();
+        }
       })
       .catch((err) => {
         console.warn(`Original failed for ${p.name}:`, err);
@@ -93,42 +97,61 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
         if (content.element === wrap) content.onError();
       });
   });
-  pswp.on('contentDestroy', ({ content }) => content.element?.querySelector('video')?.removeAttribute('src'));
+  viewer.on('contentDestroy', ({ content }) => content.element?.querySelector('video')?.removeAttribute('src'));
 
-  pswp.on('uiRegister', registerUI);
-  pswp.on('change', () => {
+  viewer.on('uiRegister', registerUI);
+  viewer.on('change', () => {
     stopAllLive();
-    onChange(pswp.currIndex);
+    const p = photos[viewer.currIndex];
+    // A neighbour that was waiting as a background prefetch is needed now: start it.
+    if (p && !peek(p.id)) loadOriginal(p, { priority: 'high' }).catch(() => {});
+    onChange(viewer.currIndex);
     updateUI();
     renderInfo();
     activateLive();
   });
-  pswp.on('tapAction', (e) => {
+  viewer.on('tapAction', (e) => {
     if (press?.held) e.preventDefault();
   });
-  pswp.on('close', () => {
-    closing = true;
-    stopAllLive();
-    // Make sure the tile we zoom back into is on screen.
-    thumbFor(pswp.currSlide.data.photo.id)?.scrollIntoView({ block: 'nearest' });
+  // Nothing in here may throw: an exception stops PhotoSwipe's close halfway, leaving a
+  // viewer that never closes (and, before this was guarded, every later photo queued forever).
+  viewer.on('close', () => {
+    closingViewers.add(viewer);
+    try {
+      stopAllLive();
+      const p = photos[viewer.currIndex];
+      if (p) thumbFor(p.id)?.scrollIntoView({ block: 'nearest' }); // zoom back into a visible tile
+    } catch (e) {
+      console.warn('[photos] close:', e);
+    }
   });
-  pswp.on('destroy', () => {
+  viewer.on('destroy', () => {
     mini?.map.remove();
     mini = null;
-    const lastId = pswp.currSlide?.data.photo.id;
+    const lastId = photos[viewer.currIndex]?.id;
+    if (pswp !== viewer) return;
     pswp = null;
-    closing = false;
     ui = null;
     removeEventListener('keydown', onKey);
     onClosed(lastId);
     if (pendingOpen) {
       const next = pendingOpen;
       pendingOpen = null;
-      create(next);
+      setTimeout(() => (pswp ? openViewer(next) : create(next))); // after PhotoSwipe's own cleanup
     }
   });
   addEventListener('keydown', onKey);
-  pswp.init();
+  viewer.init();
+}
+
+// One line per original shown: how long download / decode / display took.
+function logShown(p) {
+  const t = timing(p.id);
+  if (!t || t.logged) return;
+  t.logged = true;
+  const ms = (a, b) => (a && b ? Math.round(b - a) : '?');
+  console.debug(`[photos] ${p.name}: shown ${ms(t.start, performance.now())} ms after request `
+    + `(download ${ms(t.start, t.downloaded)} ms, ${t.method || 'native'} decode ${ms(t.downloaded, t.decoded)} ms)`);
 }
 
 export function closeViewer() {

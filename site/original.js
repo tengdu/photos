@@ -9,8 +9,12 @@ const LIMIT = (navigator.deviceMemory || 4) >= 8 ? 6 : 3;
 
 export const progress = new EventTarget();
 const cache = new Map(); // id -> { promise, result } in least-recently-used order
+const timings = new Map(); // id -> { start, downloaded, decoded, method }
+const waiting = new Map(); // id -> start(): background loads waiting for the visible photo
 let highPriority = 0;
-let idleWaiters = [];
+
+/** When the original's download/decode started and finished (for the debug log). */
+export const timing = (id) => timings.get(id);
 
 let heicSupport;
 /** Can this browser render HEIC by itself (Safari)? */
@@ -34,6 +38,7 @@ export function loadOriginal(p, { priority = 'high' } = {}) {
   if (entry) {
     cache.delete(p.id);
     cache.set(p.id, entry);
+    if (priority === 'high') waiting.get(p.id)?.(); // it's needed on screen now: stop waiting
     return entry.promise;
   }
   entry = { result: null };
@@ -54,18 +59,27 @@ function trim() {
   }
 }
 
+// Background (neighbour) loads wait until no visible photo is loading, so they never compete
+// with it for bandwidth; if the user moves to such a photo meanwhile, it starts at once.
 async function load(p, priority) {
   if (priority === 'high') highPriority++;
-  else await new Promise((resolve) => (highPriority ? idleWaiters.push(resolve) : resolve()));
+  else if (highPriority) await new Promise((resolve) => waiting.set(p.id, resolve));
+  waiting.delete(p.id);
+  const t = { start: performance.now() };
+  timings.set(p.id, t);
   try {
     const blob = await download(p, priority);
-    if (await needsDecode(p)) return { ...(await decodeHeic(await blob.arrayBuffer())), bytes: blob.size };
+    t.downloaded = performance.now();
+    if (await needsDecode(p)) {
+      const decoded = await decodeHeic(await blob.arrayBuffer());
+      Object.assign(t, { decoded: performance.now(), method: decoded.method });
+      return { ...decoded, bytes: blob.size };
+    }
+    t.decoded = t.downloaded; // the browser decodes it when it is displayed
     return { url: URL.createObjectURL(new Blob([blob], { type: MIME[p.fmt] || '' })), bytes: blob.size };
   } finally {
     if (priority === 'high' && --highPriority === 0) {
-      const waiters = idleWaiters;
-      idleWaiters = [];
-      waiters.forEach((fn) => fn());
+      for (const start of [...waiting.values()]) start();
     }
   }
 }
@@ -100,8 +114,8 @@ function decodeHeic(buffer) {
       pending.delete(data.id);
       if (data.error) job.reject(new Error(data.error));
       else {
-        console.debug(`[photos] HEIC decoded ${data.width}×${data.height} ${JSON.stringify(data.timing)}`);
-        job.resolve({ bitmap: data.bitmap, width: data.width, height: data.height, colorSpace: data.colorSpace });
+        if (data.timing?.fallbackReason) console.debug(`[photos] HEIC fallback to libheif: ${data.timing.fallbackReason}`);
+        job.resolve({ bitmap: data.bitmap, width: data.width, height: data.height, colorSpace: data.colorSpace, method: data.timing?.method });
       }
     };
     worker.onerror = (e) => {

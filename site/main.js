@@ -1,6 +1,7 @@
 import './styles.css';
 import { Library, VIEWS } from './library.js';
 import { openViewer, closeViewer, isOpen } from './viewer.js';
+import { loadOriginal } from './original.js';
 
 const $ = (s) => document.querySelector(s);
 const state = { photos: [], byId: new Map(), view: 'all', viewerFromApp: false, viewerList: null, mapActive: false, libraryScroll: 0 };
@@ -29,6 +30,7 @@ async function boot() {
     photos: state.photos,
   });
   document.addEventListener('click', onClick);
+  bindPrefetch();
   addEventListener('hashchange', route);
   route();
   if ('serviceWorker' in navigator && isSecureContext) {
@@ -171,4 +173,25 @@ function onClick(e) {
     state.viewerFromApp = true;
     location.hash = hash;
   }
+}
+
+// Desktop: start downloading a photo's original when the mouse rests on it or presses it,
+// so it's often ready by the time the viewer opens. (Not on touch, where a finger that
+// merely scrolls the grid would trigger downloads.)
+function bindPrefetch() {
+  if (navigator.connection?.saveData) return;
+  const prefetch = (tile) => {
+    const p = tile && state.byId.get(tile.dataset.id);
+    if (p) loadOriginal(p).catch(() => {});
+  };
+  let timer = 0;
+  document.addEventListener('pointerover', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    clearTimeout(timer);
+    const tile = e.target.closest?.('.tile');
+    if (tile) timer = setTimeout(() => prefetch(tile), 150);
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button === 0) prefetch(e.target.closest?.('.tile'));
+  });
 }
