@@ -3,7 +3,8 @@
 import PhotoSwipe from 'photoswipe';
 import 'photoswipe/style.css';
 import { loadOriginal, peek, progress } from './original.js';
-import { takenLabel, placeLabel, fileSize } from './format.js';
+import { takenLabel, placeLabel, fileSize, megapixels, exposure } from './format.js';
+import { loadMaplibre, mapStyle } from './maplib.js';
 
 const saveData = !!navigator.connection?.saveData;
 const finePointer = matchMedia('(hover: hover) and (pointer: fine)');
@@ -12,7 +13,10 @@ let pswp = null;
 let closing = false;
 let pendingOpen = null;
 let soundOn = false;
+let infoOpen = false;
 let ui = null;
+let mini = null; // { map, marker } for the Info panel
+const PANEL_W = 340;
 
 export const isOpen = () => !!pswp && !closing;
 
@@ -51,7 +55,12 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
     arrowPrevTitle: 'Previous (←)',
     arrowNextTitle: 'Next (→)',
     errorMsg: 'The original could not be displayed.',
-    paddingFn: (viewport) => (viewport.x < 700 ? { top: 0, bottom: 0, left: 0, right: 0 } : { top: 64, bottom: 72, left: 16, right: 16 }),
+    paddingFn: (viewport) => {
+      const pad = viewport.x < 700 ? { top: 0, bottom: 0, left: 0, right: 0 } : { top: 64, bottom: 72, left: 16, right: 16 };
+      if (infoOpen && viewport.x >= 900) pad.right = PANEL_W + 16;
+      else if (infoOpen) pad.bottom = Math.round(viewport.y * 0.48);
+      return pad;
+    },
   });
 
   // Always show the preview while the original loads (PhotoSwipe only does it for the first slide).
@@ -91,6 +100,7 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
     stopAllLive();
     onChange(pswp.currIndex);
     updateUI();
+    renderInfo();
     activateLive();
   });
   pswp.on('tapAction', (e) => {
@@ -103,6 +113,8 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
     thumbFor(pswp.currSlide.data.photo.id)?.scrollIntoView({ block: 'nearest' });
   });
   pswp.on('destroy', () => {
+    mini?.map.remove();
+    mini = null;
     const lastId = pswp.currSlide?.data.photo.id;
     pswp = null;
     closing = false;
@@ -247,6 +259,27 @@ function registerUI() {
     },
   });
   pswp.ui.registerElement({
+    name: 'info-panel',
+    order: 21,
+    appendTo: 'root',
+    onInit: (el) => {
+      el.classList.add('v-panel');
+      el.setAttribute('role', 'complementary');
+      el.setAttribute('aria-label', 'Photo info');
+      ui = { ...(ui || {}), panel: el };
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.vi-close')) toggleInfo();
+        else if (e.target.closest('.vi-map')) location.hash = `#/map/${pswp.currSlide.data.photo.id}`;
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target.closest('.vi-map')) location.hash = `#/map/${pswp.currSlide.data.photo.id}`;
+      });
+      // Keep swipes/drags inside the panel from moving the photo.
+      ['pointerdown', 'wheel', 'touchstart'].forEach((t) => el.addEventListener(t, (e) => e.stopPropagation(), { passive: true }));
+      renderInfo();
+    },
+  });
+  pswp.ui.registerElement({
     name: 'toolbar',
     order: 20,
     appendTo: 'root',
@@ -256,6 +289,7 @@ function registerUI() {
         <button class="v-btn v-live" type="button" title="Play Live Photo (Space) — or press and hold the photo">${LIVE_ICON}<span>LIVE</span></button>
         <button class="v-btn v-sound" type="button" aria-pressed="false" title="Sound for Live Photos">${MUTED_ICON}</button>
         <span class="v-status" aria-live="polite"></span>
+        <button class="v-btn v-info" type="button" aria-pressed="false" title="Info (I)">${INFO_ICON}</button>
         <a class="v-btn v-download" target="_blank" rel="noopener" title="Download the original file" download>${DOWNLOAD_ICON}<span>Original</span></a>`;
       ui = {
         ...(ui || {}),
@@ -264,7 +298,9 @@ function registerUI() {
         sound: el.querySelector('.v-sound'),
         status: el.querySelector('.v-status'),
         download: el.querySelector('.v-download'),
+        info: el.querySelector('.v-info'),
       };
+      ui.info.addEventListener('click', toggleInfo);
       ui.live.addEventListener('click', () => (currentVideo()?.classList.contains('playing') ? stopLive() : playLive()));
       ui.live.addEventListener('pointerenter', (e) => e.pointerType === 'mouse' && finePointer.matches && playLive());
       ui.live.addEventListener('pointerleave', (e) => e.pointerType === 'mouse' && stopLive());
@@ -327,9 +363,75 @@ function errorElement(p) {
 
 function onKey(e) {
   if (!pswp || e.target.closest?.('input, textarea')) return;
+  if (e.key === 'i' || e.key === 'I') {
+    toggleInfo();
+    return;
+  }
   if (e.key === ' ' && currentVideo()) {
     e.preventDefault();
     currentVideo().classList.contains('playing') ? stopLive() : playLive();
+  }
+}
+
+// ---- Info panel ----
+
+function toggleInfo() {
+  if (!pswp) return;
+  infoOpen = !infoOpen;
+  pswp.element.classList.toggle('v-info-open', infoOpen);
+  ui?.info?.setAttribute('aria-pressed', String(infoOpen));
+  pswp.updateSize(true);
+  renderInfo();
+}
+
+function renderInfo() {
+  if (!pswp || !ui?.panel) return;
+  pswp.element.classList.toggle('v-info-open', infoOpen);
+  if (!infoOpen) return;
+  const p = pswp.currSlide?.data.photo || pswp.options.dataSource[pswp.currIndex].photo;
+  const when = takenLabel(p.taken);
+  const where = placeLabel(p.place);
+  const cam = p.cam || {};
+  const camera = [cam.model?.startsWith(cam.make || '') ? '' : cam.make, cam.model].filter(Boolean).join(' ');
+  const lens = cam.lens ? cam.lens[0].toUpperCase() + cam.lens.slice(1) : '';
+  const fmt = p.fmt === 'jpg' ? 'JPEG' : p.fmt.toUpperCase();
+  const exp = [cam.iso && `ISO ${cam.iso}`, (cam.fl35 || cam.fl) && `${cam.fl35 || cam.fl} mm`, cam.f && `ƒ${cam.f}`, cam.exp && exposure(cam.exp)].filter(Boolean);
+  ui.panel.innerHTML = `
+    <div class="vi-head"><div><strong>${esc(when.date)}</strong><span>${esc(when.time)}</span></div>
+      <button type="button" class="vi-close" aria-label="Close info">×</button></div>
+    ${where ? `<div class="vi-place">${PIN_ICON}<span>${esc(where)}</span></div>` : ''}
+    ${p.geo ? '<div class="vi-map" role="link" tabindex="0" aria-label="Show on the map" title="Show on the map"></div>' : ''}
+    <section class="vi-card">
+      <div class="vi-cam"><strong>${esc(camera || 'Unknown camera')}</strong><span class="vi-badge">${fmt}</span></div>
+      ${lens ? `<div class="vi-lens">${esc(lens)}</div>` : ''}
+      <div class="vi-specs"><span>${megapixels(p.w, p.h)}</span><span>${p.w} × ${p.h}</span><span>${fileSize(p.size)}</span></div>
+      ${exp.length ? `<div class="vi-exp">${exp.map((x) => `<span>${esc(x)}</span>`).join('')}</div>` : ''}
+    </section>
+    <div class="vi-file">${esc(p.name)}${p.liveSrc ? ' · Live Photo' : ''}</div>`;
+  if (p.geo) showMiniMap(ui.panel.querySelector('.vi-map'), p);
+}
+
+async function showMiniMap(el, p) {
+  const center = [p.geo[1], p.geo[0]];
+  try {
+    const ml = await loadMaplibre();
+    if (!pswp || !el.isConnected) return;
+    if (!mini) {
+      const container = document.createElement('div');
+      container.className = 'vi-map-canvas';
+      const map = new ml.Map({ container, style: mapStyle(), center, zoom: 12.5, interactive: false, attributionControl: { compact: true }, fadeDuration: 0 });
+      // Keep the credits collapsed to their ⓘ button in this small map.
+      map.once('idle', () => container.querySelector('.maplibregl-compact-show')?.classList.remove('maplibregl-compact-show'));
+      const dot = document.createElement('span');
+      dot.className = 'vi-dot';
+      mini = { map, container, marker: new ml.Marker({ element: dot }).setLngLat(center).addTo(map) };
+    }
+    el.append(mini.container); // reuse one map (and WebGL context) for every photo
+    mini.map.resize();
+    mini.map.jumpTo({ center });
+    mini.marker.setLngLat(center);
+  } catch {
+    el.remove();
   }
 }
 
@@ -338,4 +440,6 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const LIVE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="9.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="1.6 2.2"/></svg>';
 const SOUND_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const MUTED_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16.5 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+const INFO_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.6" r="1.25" fill="currentColor"/></svg>';
+const PIN_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" fill="currentColor"/><circle cx="12" cy="10" r="2.4" fill="var(--panel-bg, #1c1c1e)"/></svg>';
 const DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';

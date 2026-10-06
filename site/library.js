@@ -31,8 +31,9 @@ function places(photos, max = 2) {
 const LIVE = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="6.4" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="9.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="1.6 2.4"/></svg>';
 
 let tileCount = 0;
-function tile(p) {
-  const eager = tileCount++ < EAGER;
+const tile = (p) => tileHTML(p, tileCount++ < EAGER);
+
+export function tileHTML(p, eager = false) {
   return `<a class="tile" href="#/photo/${p.id}" data-id="${p.id}" data-th="${p.th || ''}" data-m="${p.month}" data-d="${p.day}">`
     + `<img src="${p.thumb}" alt="${esc(p.name)}" decoding="async" ${eager ? 'fetchpriority="high"' : 'loading="lazy"'}>`
     + (p.liveSrc ? `<span class="t-live" title="Live Photo">${LIVE}</span>` : '')
@@ -99,18 +100,15 @@ export class Library {
   }
 
   show(view, anchor) {
+    document.documentElement.dataset.view = view;
     if (view !== this.view) {
       this.view = view;
       tileCount = 0;
-      document.documentElement.dataset.view = view;
       this.root.innerHTML = this.photos.length ? RENDER[view](this.photos) : '<p class="empty">No photos yet.<br><span>Share photos from your iPhone with the “Upload to GitHub” shortcut.</span></p>';
       this.root.querySelectorAll('[data-th]').forEach((el) => this.io.observe(el));
       this.root.querySelectorAll('img').forEach((img) => img.complete && img.naturalWidth && img.classList.add('loaded'));
       this.applyDensity();
       scrollTo(0, 0);
-    }
-    for (const a of this.dock.querySelectorAll('a[data-view]')) {
-      a.toggleAttribute('aria-current', a.dataset.view === view);
     }
     this.zoom.hidden = view !== 'all';
     if (anchor) this.scrollToKey(anchor);
@@ -136,6 +134,7 @@ export class Library {
 
   // Large title follows the scroll position, like Photos ("October 2026").
   updateTitle() {
+    if (this.root.hidden) return; // the map is showing
     const y = this.headerHeight() + 12;
     const x = Math.min(innerWidth / 2, 40);
     const el = document.elementFromPoint(x, y);

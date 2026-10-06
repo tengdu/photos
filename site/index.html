@@ -26,11 +26,15 @@
   </div>
 </header>
 <main id="view" class="view"></main>
-<nav id="dock" class="dock" aria-label="Library views">
-  <a href="#/years" data-view="years">Years</a>
-  <a href="#/months" data-view="months">Months</a>
-  <a href="#/days" data-view="days">Days</a>
-  <a href="#/all" data-view="all">All Photos</a>
+<div id="mapview" class="mapview" hidden></div>
+<nav id="dock" class="dock" aria-label="Views">
+  <div class="seg">
+    <a href="#/years" data-view="years">Years</a>
+    <a href="#/months" data-view="months">Months</a>
+    <a href="#/days" data-view="days">Days</a>
+    <a href="#/all" data-view="all">All Photos</a>
+  </div>
+  <a href="#/map" data-view="map" class="dock-map" aria-label="Map" title="Map"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 4v14M15 6v14" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></a>
 </nav>
 </body>
 </html>

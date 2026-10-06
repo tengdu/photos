@@ -230,12 +230,25 @@ async function bundle(dataVersion) {
   });
   const workerFile = Object.keys(worker.metafile.outputs).find((f) => f.endsWith('.js'));
 
+  // MapLibre is shipped as-is (its worker imports the same shared module) and loaded on demand.
+  const mlDir = 'node_modules/maplibre-gl/dist';
+  const mlVersion = JSON.parse(await readFile('node_modules/maplibre-gl/package.json', 'utf8')).version;
+  const mlOut = path.join(assets, `maplibre-${mlVersion}`);
+  await mkdir(mlOut, { recursive: true });
+  for (const f of ['maplibre-gl.mjs', 'maplibre-gl-shared.mjs', 'maplibre-gl-worker.mjs', 'maplibre-gl.css']) {
+    const text = (await readFile(path.join(mlDir, f), 'utf8')).replace(/\n\/[/*][#@] sourceMappingURL=\S+\s*$/, '\n');
+    await writeFile(path.join(mlOut, f), text);
+  }
+
   const app = await esbuild.build({
     ...common,
     entryPoints: ['site/main.js'],
     format: 'esm',
     splitting: true,
-    define: { __HEIC_WORKER__: JSON.stringify(rel(workerFile)) },
+    define: {
+      __HEIC_WORKER__: JSON.stringify(rel(workerFile)),
+      __MAPLIBRE__: JSON.stringify(`${rel(mlOut)}/`),
+    },
   });
   const [js, out] = Object.entries(app.metafile.outputs).find(([, o]) => o.entryPoint?.endsWith('site/main.js'));
 

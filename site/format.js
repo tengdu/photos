@@ -49,3 +49,9 @@ export function fileSize(bytes) {
 
 export const megapixels = (w, h) => `${Math.round((w * h) / 1e6)} MP`;
 export const count = (n, word) => `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
+
+export function exposure(sec) {
+  if (!sec) return '';
+  if (sec >= 1) return `${+sec.toFixed(1)} s`;
+  return `1/${Math.round(1 / sec)} s`;
+}
