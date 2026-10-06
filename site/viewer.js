@@ -157,8 +157,9 @@ function logShown(p) {
   if (!t || !opened || t.logged === opened) return;
   t.logged = opened;
   const s = (a, b) => `${(Math.max(0, b - a) / 1000).toFixed(2)} s`;
-  const mbps = t.downloaded > t.start ? `, ${(p.size / 1e6 / ((t.downloaded - t.start) / 1000)).toFixed(1)} MB/s` : '';
-  const work = `download ${s(t.start, t.downloaded)} (${(p.size / 1e6).toFixed(1)} MB${mbps}) · `
+  const dl = t.downloaded - t.start;
+  const net = dl < 40 ? 'from cache' : `download ${s(t.start, t.downloaded)} (${(p.size / 1e6).toFixed(1)} MB, ${(p.size / 1e6 / (dl / 1000)).toFixed(1)} MB/s)`;
+  const work = `${net} · `
     + (t.method === 'native' ? 'browser draws it' : `decode ${s(t.downloaded, t.decoded)}`);
   const ready = t.decoded ?? t.downloaded;
   const line = ready <= opened
