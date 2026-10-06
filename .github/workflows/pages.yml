@@ -7,6 +7,7 @@ on:
       - 'photos/**'
       - 'scripts/**'
       - 'assets/**'
+      - 'site/**'
       - 'package*.json'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
@@ -27,8 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install HEIC decoder and ffmpeg
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libheif-examples libheif-plugin-libde265 ffmpeg
+      - name: Install HEIC decoder
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libheif-examples libheif-plugin-libde265
 
       - uses: actions/setup-node@v4
         with:
@@ -45,6 +46,9 @@ jobs:
           restore-keys: img-
 
       - run: node scripts/build.mjs
+        env:
+          # "lat,lon,radius_m; …" — photos within these areas are left off the map.
+          PRIVACY_ZONES: ${{ secrets.PRIVACY_ZONES }}
 
       - uses: actions/upload-pages-artifact@v3
         with:

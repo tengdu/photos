@@ -1,36 +1,46 @@
-// Builds the static gallery in _site/ from the originals in photos/.
-// Originals are never modified; the page loads them from raw.githubusercontent.com
-// when the browser can display them, and falls back to the generated JPEG / MP4 otherwise.
-import { readdir, mkdir, mkdtemp, copyFile, writeFile, readFile, access, rm } from 'node:fs/promises';
+// Builds the gallery in _site/ from the originals in photos/.
+// Each photo gets exactly ONE generated image: a 720px WebP preview, used everywhere except the
+// viewer. The viewer always shows the original file, loaded from raw.githubusercontent.com.
+import { readdir, mkdir, mkdtemp, copyFile, writeFile, readFile, access, rm, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
+import exifr from 'exifr';
+import * as esbuild from 'esbuild';
+import { rgbaToThumbHash } from 'thumbhash';
+import { parseHeif, itemProps, primarySize, exifTiff } from '../site/lib/heif.js';
+import { placeFor } from './places.mjs';
 
 const SRC = 'photos';
-const CACHE = '.cache/v1';
+const CACHE = '.cache/v2';
 const OUT = '_site';
+const PREVIEW = 720; // long side of the one generated image per photo
 const REPO = process.env.GITHUB_REPOSITORY || process.env.PHOTOS_REPO || 'tengdu/photos';
 const BRANCH = process.env.GITHUB_REF_NAME || 'main';
-const TITLE = process.env.SITE_TITLE || 'Photos';
-const FFMPEG = process.env.FFMPEG || 'ffmpeg';
+// Where the browser loads originals from (overridable for local testing).
+const RAW_BASE = process.env.RAW_BASE || `https://raw.githubusercontent.com/${REPO}/${BRANCH}/`;
 
 const STILL = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif']);
-const WEB_SAFE = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+const HEIF = new Set(['.heic', '.heif']);
 const MOTION = new Set(['.mov', '.mp4']);
+const EXIF_PICK = [
+  'Make', 'Model', 'LensModel', 'FNumber', 'ExposureTime', 'ISO', 'FocalLength', 'FocalLengthIn35mmFormat',
+  'DateTimeOriginal', 'OffsetTimeOriginal', 'CreateDate', 'OffsetTime',
+  'GPSLatitude', 'GPSLatitudeRef', 'GPSLongitude', 'GPSLongitudeRef',
+];
 
 const exists = (p) => access(p).then(() => true, () => false);
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-const rawUrl = (rel) =>
-  `https://raw.githubusercontent.com/${REPO}/${BRANCH}/${rel.split('/').map(encodeURIComponent).join('/')}`;
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const sha1 = (data) => createHash('sha1').update(data).digest('hex');
+const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
 
 // HEIC can't be decoded by the prebuilt sharp: use libheif (CI) or sips (macOS).
 function heicToJpeg(src, dest) {
   for (const [cmd, args] of [
-    ['heif-dec', [src, dest]],
-    ['heif-convert', [src, dest]],
+    ['heif-dec', ['--quality', '92', src, dest]],
+    ['heif-convert', ['-q', '92', src, dest]],
     ['sips', ['-s', 'format', 'jpeg', src, '--out', dest]],
   ]) {
     try { run(cmd, args); return; } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -38,129 +48,257 @@ function heicToJpeg(src, dest) {
   throw new Error('no HEIC decoder found (install libheif-examples)');
 }
 
-async function processStill(item, tmpDir) {
-  const base = path.join(CACHE, item.id);
-  const metaFile = `${base}.json`;
-  if (await exists(metaFile)) return JSON.parse(await readFile(metaFile, 'utf8'));
-
-  let input = item.still;
-  if (!WEB_SAFE.has(item.ext)) {
-    input = path.join(tmpDir, `${item.id}.jpg`);
-    heicToJpeg(item.still, input);
+async function readExif(input) {
+  try {
+    return (await exifr.parse(input, {
+      reviveValues: false, translateValues: false, gps: true,
+      xmp: false, icc: false, iptc: false, jfif: false, ihdr: false, pick: EXIF_PICK,
+    })) || {};
+  } catch {
+    return {};
   }
-  const img = sharp(input, { failOn: 'none' }).rotate();
-  const { width, height } = await img.clone().resize(2400, 2400, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 85, mozjpeg: true }).toFile(`${base}-l.jpg`);
-  await img.clone().resize(600, 600, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 78, mozjpeg: true }).toFile(`${base}-t.jpg`);
-  const meta = { w: width, h: height };
-  await writeFile(metaFile, JSON.stringify(meta));
-  return meta;
 }
 
-async function processMotion(item) {
-  const out = path.join(CACHE, `${item.id}.mp4`);
-  if (await exists(out)) return;
-  // Cap the long side at 1080px, keep audio, make it streamable.
-  run(FFMPEG, ['-y', '-v', 'error', '-i', item.motion,
-    '-vf', "scale='if(gt(iw,ih),min(1080,iw),-2)':'if(gt(iw,ih),-2,min(1080,ih))'",
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', out]);
+// "2026:10:04 14:23:24" + "-05:00" → "2026-10-04T14:23:24-05:00" (the photo's own local time).
+function takenAt(exif, file) {
+  const m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(exif.DateTimeOriginal || exif.CreateDate || '');
+  if (m && m[1] !== '0000') {
+    const off = exif.OffsetTimeOriginal || exif.OffsetTime;
+    return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${/^[+-]\d{2}:\d{2}$/.test(off || '') ? off : ''}`;
+  }
+  // No EXIF date: use the upload time in the file name (YYYYMMDD-HHmmss-...).
+  const s = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(path.basename(file));
+  return s ? `${s[1]}-${s[2]}-${s[3]}T${s[4]}:${s[5]}:${s[6]}` : null;
 }
 
-async function collect() {
+const instant = (taken) => (taken ? Date.parse(/[+-]\d{2}:\d{2}$/.test(taken) ? taken : `${taken}Z`) : -Infinity);
+
+function camera(exif) {
+  const clean = (s) => (typeof s === 'string' ? s.replace(/\0/g, '').trim() : undefined) || undefined;
+  const num = (v) => (Array.isArray(v) ? v[0] : v);
+  const make = clean(exif.Make);
+  const model = clean(exif.Model);
+  let lens = clean(exif.LensModel);
+  if (lens && model && lens.startsWith(model)) lens = lens.slice(model.length).trim(); // "iPhone 18 Pro back triple camera…"
+  const cam = {
+    make, model, lens,
+    f: exif.FNumber ? round(exif.FNumber, 2) : undefined,
+    exp: num(exif.ExposureTime) || undefined,
+    iso: num(exif.ISO) || undefined,
+    fl: exif.FocalLength ? round(exif.FocalLength, 1) : undefined,
+    fl35: num(exif.FocalLengthIn35mmFormat) || undefined,
+  };
+  Object.keys(cam).forEach((k) => cam[k] === undefined && delete cam[k]);
+  return Object.keys(cam).length ? cam : null;
+}
+
+// ---------- Privacy zones (GitHub Secret PRIVACY_ZONES = "lat,lon,radius_m; …") ----------
+function privacyZones() {
+  const zones = (process.env.PRIVACY_ZONES || '')
+    .split(/[;\n]/)
+    .map((s) => s.trim().split(/\s*,\s*/).map(Number))
+    .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon))
+    .map(([lat, lon, r]) => ({ lat, lon, r: r > 0 ? r : 1000 }));
+  // Never log the coordinates themselves.
+  console.log(zones.length ? `privacy zones: ${zones.length}` : 'privacy zones: none (set the PRIVACY_ZONES secret to hide places near home)');
+  return zones;
+}
+
+function metersBetween([lat1, lon1], [lat2, lon2]) {
+  const rad = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * rad) / 2) ** 2
+    + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(((lon2 - lon1) * rad) / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(a));
+}
+
+// ---------- Collect originals ----------
+async function collect(hashes) {
   const files = (await readdir(SRC, { recursive: true, withFileTypes: true }))
     .filter((d) => d.isFile())
-    .map((d) => path.relative('.', path.join(d.parentPath, d.name)).split(path.sep).join('/'));
+    .map((d) => path.relative('.', path.join(d.parentPath, d.name)).split(path.sep).join('/'))
+    .sort();
+  // A still and a .mov with the same name are a Live Photo.
   const byStem = new Map();
   for (const rel of files) {
     const ext = path.extname(rel).toLowerCase();
     const kind = STILL.has(ext) ? 'still' : MOTION.has(ext) ? 'motion' : null;
     if (!kind) continue;
     const stem = rel.slice(0, -ext.length).toLowerCase();
-    const entry = byStem.get(stem) || {};
-    entry[kind] = rel;
-    if (kind === 'still') entry.ext = ext;
-    byStem.set(stem, entry);
+    const e = byStem.get(stem) || {};
+    e[kind] = rel;
+    if (kind === 'still') e.ext = ext;
+    byStem.set(stem, e);
   }
-  const items = [];
-  for (const [stem, e] of byStem) {
-    if (!e.still) { console.warn(`skip ${e.motion}: video without a still photo`); continue; }
-    e.id = createHash('sha1').update(e.still).digest('hex').slice(0, 16);
-    e.stem = stem;
-    // Uploads are named [YYYY/MM/]YYYYMMDD-HHmmss-*; sort and group by that stamp,
-    // falling back to the YYYY/MM folder, so the folder is optional.
-    const stamp = path.basename(e.still).match(/^(\d{4})(\d{2})\d{2}-\d{6}/);
-    const folder = e.still.match(/^photos\/(\d{4})\/(\d{2})\//);
-    e.group = stamp ? `${stamp[1]}-${stamp[2]}` : folder ? `${folder[1]}-${folder[2]}` : 'Other';
-    e.sortKey = `${stamp ? stamp[0] : '0'}|${e.still}`;
-    items.push(e);
+  // Identical files (the same photo uploaded twice) are shown once; prefer the copy with motion.
+  const byId = new Map();
+  for (const e of byStem.values()) {
+    if (!e.still) { console.log(`skip ${e.motion}: videos aren't supported yet`); continue; }
+    const { size } = await stat(e.still);
+    const key = `${e.still}|${size}`;
+    e.id = hashes[key] ??= sha1(await readFile(e.still)).slice(0, 16);
+    const prev = byId.get(e.id);
+    if (prev) {
+      const keep = !prev.motion && e.motion ? e : prev;
+      console.log(`duplicate: ${(keep === e ? prev : e).still} is the same file as ${keep.still}`);
+      byId.set(e.id, keep);
+    } else {
+      byId.set(e.id, e);
+    }
   }
-  return items.sort((a, b) => (a.sortKey < b.sortKey ? 1 : -1));
+  return [...byId.values()];
 }
 
+// ---------- Per-photo processing (cached by content hash) ----------
+async function processItem(item, tmpDir) {
+  const metaFile = path.join(CACHE, `${item.id}.json`);
+  const webp = path.join(CACHE, `${item.id}.webp`);
+  if (await exists(metaFile) && await exists(webp)) return JSON.parse(await readFile(metaFile, 'utf8'));
+
+  const buf = await readFile(item.still);
+  let exif, w, h, input, rotate;
+  if (HEIF.has(item.ext)) {
+    const heif = parseHeif(buf);
+    const tiff = exifTiff(heif);
+    exif = tiff ? await readExif(Buffer.from(tiff.buffer, tiff.byteOffset, tiff.byteLength)) : {};
+    ({ width: w, height: h } = primarySize(heif));
+    input = path.join(tmpDir, `${item.id}.jpg`);
+    heicToJpeg(item.still, input);
+    // Decoders differ in whether they apply the HEIF rotation; compare with the upright size.
+    const m = await sharp(input).metadata();
+    const ccw = itemProps(heif, heif.primaryId).transforms.filter((t) => t.type === 'irot').reduce((a, t) => a + t.angle, 0) % 360;
+    rotate = m.width === w && m.height === h ? 0 : (360 - ccw) % 360;
+  } else {
+    exif = await readExif(buf);
+    const m = await sharp(buf).metadata();
+    [w, h] = (m.orientation || 1) >= 5 ? [m.height, m.width] : [m.width, m.height];
+    input = buf;
+    rotate = 'exif';
+  }
+
+  let img = sharp(input, { failOn: 'none' });
+  if (rotate === 'exif') img = img.rotate();
+  else if (rotate) img = img.rotate(rotate);
+  const out = await img.clone()
+    .resize(PREVIEW, PREVIEW, { fit: 'inside', withoutEnlargement: true })
+    .webp({ quality: 70, effort: 5 })
+    .toFile(webp);
+  if (w !== h && out.width !== out.height && (w > h) !== (out.width > out.height)) {
+    console.warn(`warning: preview orientation differs from the original for ${item.still}`);
+  }
+  const { data, info } = await img.clone()
+    .resize(100, 100, { fit: 'inside' })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const lat = exif.latitude, lon = exif.longitude;
+  const geo = Number.isFinite(lat) && Number.isFinite(lon) && (lat || lon) ? [round(lat, 5), round(lon, 5)] : null;
+  const meta = {
+    taken: takenAt(exif, item.still),
+    w, h,
+    th: Buffer.from(rgbaToThumbHash(info.width, info.height, data)).toString('base64'),
+    fmt: item.ext === '.jpeg' ? 'jpg' : item.ext.slice(1),
+    size: buf.length,
+    geo,
+    cam: camera(exif),
+  };
+  await writeFile(metaFile, JSON.stringify(meta));
+  return meta;
+}
+
+// ---------- Front-end bundle ----------
+async function bundle(dataVersion) {
+  const assets = path.join(OUT, 'assets');
+  await mkdir(assets, { recursive: true });
+  const rel = (f) => path.relative(OUT, f).split(path.sep).join('/');
+  const common = {
+    bundle: true, minify: true, metafile: true, legalComments: 'none', logLevel: 'warning',
+    target: ['chrome100', 'safari15', 'firefox100'],
+    outdir: assets, entryNames: '[name]-[hash]', chunkNames: 'chunk-[hash]', assetNames: '[name]-[hash]',
+    external: ['fs', 'path', 'crypto', 'url', 'module', 'worker_threads', 'perf_hooks'], // libheif's Node-only branch
+  };
+
+  const wasm = await readFile('node_modules/libheif-js/libheif-wasm/libheif.wasm');
+  const wasmName = `libheif-${sha1(wasm).slice(0, 8)}.wasm`;
+  await writeFile(path.join(assets, wasmName), wasm);
+
+  const worker = await esbuild.build({
+    ...common,
+    entryPoints: ['site/heic-worker.js'],
+    format: 'iife',
+    define: { __LIBHEIF_WASM__: JSON.stringify(wasmName) },
+  });
+  const workerFile = Object.keys(worker.metafile.outputs).find((f) => f.endsWith('.js'));
+
+  const app = await esbuild.build({
+    ...common,
+    entryPoints: ['site/main.js'],
+    format: 'esm',
+    splitting: true,
+    define: { __HEIC_WORKER__: JSON.stringify(rel(workerFile)) },
+  });
+  const [js, out] = Object.entries(app.metafile.outputs).find(([, o]) => o.entryPoint?.endsWith('site/main.js'));
+
+  const html = (await readFile('site/index.html', 'utf8'))
+    .replace('__JS__', rel(js))
+    .replace('__CSS__', rel(out.cssBundle))
+    .replace('__PHOTOS__', `photos.json?v=${dataVersion}`);
+  await writeFile(path.join(OUT, 'index.html'), html);
+  await copyFile('assets/heic-test.heic', path.join(OUT, 'heic-test.heic'));
+  const sizes = Object.entries({ ...app.metafile.outputs, ...worker.metafile.outputs })
+    .map(([f, o]) => `${rel(f)} ${(o.bytes / 1024).toFixed(0)} KB`);
+  console.log(`bundle: ${sizes.join(', ')}, ${wasmName} ${(wasm.length / 1024).toFixed(0)} KB`);
+}
+
+// ---------- Main ----------
 async function main() {
   await mkdir(CACHE, { recursive: true });
   await rm(OUT, { recursive: true, force: true });
   await mkdir(path.join(OUT, 'm'), { recursive: true });
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'gallery-'));
+  const hashFile = path.join(CACHE, 'hashes.json');
+  const hashes = (await exists(hashFile)) ? JSON.parse(await readFile(hashFile, 'utf8')) : {};
+  const zones = privacyZones();
 
-  const photos = [];
-  for (const item of await collect()) {
+  const items = [];
+  let fresh = 0;
+  for (const item of await collect(hashes)) {
     try {
-      const meta = await processStill(item, tmpDir);
-      let motion = false;
-      if (item.motion) {
-        try { await processMotion(item); motion = true; }
-        catch (e) { console.warn(`motion failed for ${item.motion}: ${e.stderr || e.message}`); }
-      }
-      const copy = [`${item.id}-t.jpg`, `${item.id}-l.jpg`, ...(motion ? [`${item.id}.mp4`] : [])];
-      for (const f of copy) await copyFile(path.join(CACHE, f), path.join(OUT, 'm', f));
-      photos.push({
-        name: path.basename(item.still),
-        group: item.group,
-        w: meta.w, h: meta.h,
-        thumb: `m/${item.id}-t.jpg`,
-        large: `m/${item.id}-l.jpg`,
-        orig: rawUrl(item.still),
-        heic: !WEB_SAFE.has(item.ext),
-        ...(motion && { mp4: `m/${item.id}.mp4`, mov: item.motion.toLowerCase().endsWith('.mov') ? rawUrl(item.motion) : null }),
+      const cached = await exists(path.join(CACHE, `${item.id}.json`));
+      const meta = await processItem(item, tmpDir);
+      if (!cached) fresh++;
+      await copyFile(path.join(CACHE, `${item.id}.webp`), path.join(OUT, 'm', `${item.id}.webp`));
+      const hidden = meta.geo && zones.some((z) => metersBetween(meta.geo, [z.lat, z.lon]) <= z.r);
+      const place = meta.geo ? placeFor(meta.geo[0], meta.geo[1]) : null; // not cached: cheap, and rules may change
+      items.push({
+        id: item.id,
+        path: item.still,
+        taken: meta.taken,
+        w: meta.w,
+        h: meta.h,
+        th: meta.th,
+        fmt: meta.fmt,
+        size: meta.size,
+        ...(item.motion && { live: item.motion }),
+        ...(meta.geo && !hidden && { geo: meta.geo }),
+        ...(place && { place }),
+        ...(meta.cam && { cam: meta.cam }),
       });
-      console.log(`ok  ${item.still}${motion ? ' (live)' : ''}`);
     } catch (e) {
-      console.warn(`skip ${item.still}: ${e.stderr || e.message}`);
+      console.warn(`skip ${item.still}: ${e.stderr?.toString().trim() || e.message}`);
     }
   }
   await rm(tmpDir, { recursive: true, force: true });
-  await copyFile('assets/heic-test.heic', path.join(OUT, 'heic-test.heic'));
-  const template = await readFile('scripts/template.html', 'utf8');
-  await writeFile(path.join(OUT, 'index.html'), render(template, photos));
-  console.log(`built ${photos.length} photos → ${OUT}/`);
-}
+  await writeFile(hashFile, JSON.stringify(hashes));
 
-function render(template, photos) {
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const label = (g) => (g === 'Other' ? 'Other' : `${months[+g.slice(5) - 1]} ${g.slice(0, 4)}`);
-  let html = '';
-  let group = null;
-  photos.forEach((p, i) => {
-    if (p.group !== group) {
-      if (group !== null) html += '</div></section>';
-      group = p.group;
-      html += `<section><h2>${esc(label(group))}</h2><div class="grid">`;
-    }
-    html += `<a class="tile" href="${esc(p.large)}" data-i="${i}">`
-      + `<img src="${esc(p.thumb)}" alt="${esc(p.name)}" width="${p.w}" height="${p.h}" loading="lazy" decoding="async">`
-      + (p.mp4 ? '<span class="badge">LIVE</span>' : '') + '</a>';
-  });
-  if (group !== null) html += '</div></section>';
-  if (!photos.length) html = '<p class="empty">No photos yet.</p>';
-  // Function replacers so "$" in file names is never treated as a replacement pattern.
-  return template
-    .replaceAll('{{TITLE}}', () => esc(TITLE))
-    .replace('{{COUNT}}', () => `${photos.length} photo${photos.length === 1 ? '' : 's'}`)
-    .replace('{{GRID}}', () => html)
-    .replace('{{DATA}}', () => JSON.stringify(photos).replace(/</g, '\\u003c'));
+  items.sort((a, b) => instant(b.taken) - instant(a.taken) || (a.path < b.path ? 1 : -1));
+  const json = JSON.stringify({ raw: RAW_BASE, items });
+  await writeFile(path.join(OUT, 'photos.json'), json);
+  await bundle(sha1(json).slice(0, 10));
+
+  const live = items.filter((i) => i.live).length;
+  const mapped = items.filter((i) => i.geo).length;
+  console.log(`built ${items.length} photos (${fresh} new, ${live} live, ${mapped} on the map) → ${OUT}/`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

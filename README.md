@@ -2,11 +2,16 @@
 
 Original photos from my iPhone, published as a gallery at **https://tengdu.github.io/photos/**.
 
-- `photos/YYYY/MM/` holds the **untouched originals** (HEIC/JPEG, plus a `.mov` with the same name for Live Photos).
-- On every push, `.github/workflows/pages.yml` runs `scripts/build.mjs`. The script makes thumbnails, a JPEG copy for browsers that can't show HEIC, and an MP4 copy of the Live Photo motion, then deploys to GitHub Pages.
-- The gallery shows the **original file** (loaded from `raw.githubusercontent.com`) whenever the browser can display it. Safari shows HEIC originals; other browsers get the JPEG. Live Photos play when you hover, press and hold, or tap **LIVE**.
+- `photos/` holds the **untouched originals**: HEIC/JPEG, plus a `.mov` with the same name for Live Photos.
+- On every push, `.github/workflows/pages.yml` runs `scripts/build.mjs`. For each photo it generates **one** image, a 720px WebP preview, which is used in the grids and cards. It also reads the capture time, camera details and GPS, and looks up a place name offline. Then it bundles the site and deploys it to GitHub Pages.
+- The **viewer always shows the original file**, loaded from `raw.githubusercontent.com`. JPEGs, and HEIC in Safari, are displayed directly. Chrome and Edge decode the original HEIC with the hardware HEVC decoder (WebCodecs, ~0.1–0.5 s). Other browsers fall back to libheif (WASM). Live Photos play the original `.mov`: they play once when opened, and again when you press and hold the photo, hover over **LIVE**, or press Space.
+- Views: **Years**, **Months**, **Days** and **All Photos**. Identical files are shown once.
 
 > The repo is public: anyone can download the originals, including the GPS location stored in them.
+
+### Hide places near home (optional)
+
+Add a repository secret **`PRIVACY_ZONES`** in Settings → Secrets and variables → Actions. Its value is one or more `latitude,longitude,radius_in_metres` entries separated by `;`, for example `47.61,-122.33,1000`. Photos taken inside these areas keep their city name, but their coordinates are left out of the website (the original files still contain GPS). The value stays private; the build log only prints how many zones are set.
 
 ## 1. Create a GitHub token (once)
 
@@ -67,6 +72,12 @@ Each photo becomes one commit. The gallery updates about 1–2 minutes after the
 
 ```sh
 npm ci
-FFMPEG=/path/to/ffmpeg node scripts/build.mjs   # HEIC is decoded with libheif, or sips on macOS
+node scripts/build.mjs          # HEIC previews use libheif's heif-dec, or sips on macOS
 python3 -m http.server -d _site 8000
 ```
+
+Set `RAW_BASE` to load originals from somewhere other than this repo, for example a local folder served at `http://localhost:8000/raw/`.
+
+## Credits
+
+Place names: [GeoNames](https://www.geonames.org/) cities15000 (CC BY 4.0), in `scripts/geo/`. Viewer: [PhotoSwipe](https://photoswipe.com/) (MIT). HEIC fallback decoder: [libheif-js](https://github.com/catdad-experiments/libheif-js) (LGPL-3.0). Placeholders: [ThumbHash](https://evanw.github.io/thumbhash/) (MIT). EXIF: [exifr](https://github.com/MikeKovarik/exifr) (MIT).
