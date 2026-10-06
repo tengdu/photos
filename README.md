@@ -67,7 +67,7 @@ To see the URL the Shortcut actually builds, add a **Text** action containing th
 ## 3. Use it
 
 Photos app → select photos → **Share**. To keep the full original, tap **Options** at the top of the share sheet and turn **Location** and **All Photos Data** on. Then pick **Upload to GitHub**.
-Each photo becomes one commit. The gallery updates about 1–2 minutes after the last upload.
+Each photo becomes one commit. The build waits until the uploads stop (60 seconds without a new one), so a whole batch is built once, and the gallery updates about 2 minutes after the last upload.
 
 ## Build locally
 

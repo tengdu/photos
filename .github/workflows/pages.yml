@@ -17,14 +17,29 @@ permissions:
   pages: write
   id-token: write
 
-# A burst of uploads (one commit per photo) queues up; only the latest pending run is kept.
-concurrency:
-  group: pages
-  cancel-in-progress: false
-
 jobs:
+  # Every uploaded file is its own commit, so a batch of photos starts one run per file.
+  # Each run first waits for the uploads to stop. A newer run cancels older runs that are
+  # still waiting, so the whole batch is built once, after the last upload.
+  wait:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages-wait
+      cancel-in-progress: true
+    steps:
+      - name: Wait for more uploads
+        run: sleep 60
+
   build:
+    needs: wait
     runs-on: ubuntu-24.04
+    # One build/deploy at a time; a newer pending run replaces an older pending one.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,12 +69,5 @@ jobs:
         with:
           path: _site
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
       - id: deployment
         uses: actions/deploy-pages@v4
