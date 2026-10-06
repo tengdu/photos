@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Decode test</title>
+<style>
+  body { margin: 0; padding: 16px; font: 15px/1.45 -apple-system, system-ui, sans-serif; background: #fff; color: #111; }
+  @media (prefers-color-scheme: dark) { body { background: #000; color: #eee; } }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { margin: 0 0 12px; color: #888; }
+  button { font: inherit; font-weight: 600; padding: 10px 18px; border: 0; border-radius: 999px; background: #0a84ff; color: #fff; }
+  button:disabled { opacity: 0.5; }
+  ul { padding-left: 18px; }
+  li { margin: 8px 0; word-break: break-word; }
+  #stage { height: 1px; overflow: hidden; }
+</style>
+</head>
+<body>
+<h1>Original decode test</h1>
+<p>Measures how this browser decodes one of the original HEIC photos in different ways. It downloads the photo about 5 times.</p>
+<button id="go" type="button">Run test</button>
+<ul id="out"></ul>
+<div id="stage"></div>
+<script type="module" src="decode-test.js"></script>
+</body>
+</html>

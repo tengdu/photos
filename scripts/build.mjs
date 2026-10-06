@@ -279,6 +279,10 @@ async function bundle(dataVersion) {
   await writeFile(path.join(OUT, 'version.json'), JSON.stringify({ app: rel(js), data: `photos.json?v=${dataVersion}` }));
   await copyFile('assets/heic-test.heic', path.join(OUT, 'heic-test.heic'));
 
+  // Diagnostics page, not linked from the site: /lab/decode-test.html
+  await esbuild.build({ ...common, entryPoints: ['site/lab/decode-test.js'], format: 'esm', outdir: path.join(OUT, 'lab'), entryNames: '[name]', metafile: false });
+  await copyFile('site/lab/decode-test.html', path.join(OUT, 'lab', 'decode-test.html'));
+
   // Installable web app: icons, manifest, and a service worker for instant repeat visits.
   const icon = await readFile('site/icon.svg');
   await writeFile(path.join(OUT, 'icon.svg'), icon);
