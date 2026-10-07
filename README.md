@@ -14,7 +14,7 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 
 ### Delete photos and videos
 
-Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on your iPhone, iPad or Mac; `?owner=off` turns it off again. Then, in All Photos or Days, tap **Select**, tap the photos and videos (or **Select All**), **Delete** → **Delete with Shortcut**. The site starts the **Delete from GitHub** shortcut below with the list of files (Live Photo videos and video placeholders included); it deletes them, and Shortcuts returns to the site, where they disappear at once. The site rebuilds once, about 2 minutes after the last deletion; that build also deletes the videos whose placeholder is gone from the release. Deleted photos stay in the repository's Git history; deleted videos are gone for good.
+Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on your iPhone, iPad or Mac; `?owner=off` turns it off again. Then, in All Photos or Days, tap **Select**, tap the photos and videos (or **Select All**), **Delete** → **Delete with Shortcut**. The site starts the **Delete from GitHub** shortcut below with the list of files (Live Photo videos and video placeholders included); it deletes them, and Shortcuts returns to the site, where they disappear at once. The site rebuilds once, about a minute after the last deletion; that build also deletes the videos whose placeholder is gone from the release. Deleted photos stay in the repository's Git history; deleted videos are gone for good.
 
 ### Delete from GitHub shortcut
 
@@ -126,7 +126,7 @@ To see the URL the Shortcut actually builds, add a **Text** action containing th
 ## 3. Use it
 
 Photos app → select photos and videos → **Share**. To keep the full original, tap **Options** at the top of the share sheet and turn **Location** and **All Photos Data** on. Then pick **Upload to GitHub**.
-Each photo becomes one commit (a video: one file in the release plus its placeholder's commit). The build waits until the uploads stop (60 seconds without a new one), so a whole batch is built once, and the gallery updates about 2 minutes after the last upload.
+Each photo becomes one commit (a video: one file in the release plus its placeholder's commit). Each upload cancels the build started by the one before it, and a build only starts its work after 20 seconds without a new upload, so a whole batch is built once and the gallery updates about a minute after the last upload.
 
 ## Build locally
 

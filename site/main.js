@@ -149,7 +149,7 @@ function shortcutReturned({ shortcut, arg }) {
     const what = itemsLabel([...ids].map((id) => state.byId.get(id))).toLowerCase();
     rememberDeleted(ids);
     removePhotos(ids);
-    selection.toast(`Deleted ${what}. The site updates in about 2 minutes.`);
+    selection.toast(`Deleted ${what}. The site updates in about a minute.`);
   } else if (shortcut === 'delete-failed' && selection) {
     const reason = new URLSearchParams(arg.split('?')[1] || '').get('errorMessage');
     selection.toast(`The “Delete from GitHub” shortcut didn't finish${reason ? `: ${reason}` : '.'} Nothing was hidden.`);

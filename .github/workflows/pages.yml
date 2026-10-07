@@ -17,34 +17,30 @@ permissions:
   pages: write
   id-token: write
 
-jobs:
-  # Every uploaded file is its own commit, so a batch of photos starts one run per file.
-  # Each run first waits for the uploads to stop. A newer run cancels older runs that are
-  # still waiting, so the whole batch is built once, after the last upload.
-  wait:
-    runs-on: ubuntu-latest
-    concurrency:
-      group: pages-wait
-      cancel-in-progress: true
-    steps:
-      - name: Wait for more uploads
-        run: sleep 60
+# Every uploaded file is its own commit, so a batch of photos starts one run per file. Each new
+# run cancels the one before it, and a run only builds once 20 seconds have passed without a
+# newer upload, so a whole batch is built and deployed once, right after its last upload.
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
+jobs:
   build:
-    needs: wait
     runs-on: ubuntu-24.04
-    # One build/deploy at a time; a newer pending run replaces an older pending one.
-    concurrency:
-      group: pages
-      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      # In the background, while the next steps set up: none of this waits for apt.
+      - name: Install the HEIC decoder
+        run: |
+          date +%s > /tmp/started
+          pkgs="libheif-examples libheif-plugin-libde265"
+          ( sudo apt-get install -y -q --no-install-recommends $pkgs \
+              || { sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends $pkgs; }
+            echo $? > /tmp/heif-done ) < /dev/null > /tmp/heif.log 2>&1 &
 
-      - name: Install HEIC decoder
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libheif-examples libheif-plugin-libde265
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
@@ -60,6 +56,13 @@ jobs:
           key: img-${{ github.run_id }}
           restore-keys: img-
 
+      - name: Wait for more uploads
+        run: |
+          left=$(( $(cat /tmp/started) + 20 - $(date +%s) ))
+          if [ "$left" -gt 0 ]; then sleep "$left"; fi
+          for i in $(seq 120); do [ -e /tmp/heif-done ] && break; sleep 1; done
+          if [ "$(cat /tmp/heif-done 2>/dev/null)" != 0 ]; then cat /tmp/heif.log; echo "::warning::Installing the HEIC decoder failed"; fi
+
       - run: node scripts/build.mjs
         env:
           # "lat,lon,radius_m; …" — photos within these areas are left off the map.
@@ -67,7 +70,9 @@ jobs:
           # Lists the videos in the "media" release.
           GITHUB_TOKEN: ${{ github.token }}
           # ffmpeg makes the preview of a new video; installed only when one needs it.
-          FFMPEG_INSTALL: sudo apt-get install -y -q --no-install-recommends ffmpeg
+          FFMPEG_INSTALL: >-
+            sudo apt-get install -y -q --no-install-recommends ffmpeg
+            || { sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg; }
 
       - uses: actions/upload-pages-artifact@v3
         with:
