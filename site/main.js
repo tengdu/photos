@@ -12,7 +12,7 @@ let mapModule;
 
 boot();
 
-// "?owner" marks this browser as the owner's (shows Delete links in the Info panel); "?owner=off" undoes it.
+// "?owner" marks this browser as the owner's (Select & delete); "?owner=off" undoes it.
 function ownerMode() {
   const params = new URLSearchParams(location.search);
   try {
@@ -52,15 +52,7 @@ async function boot() {
     zoom: $('#zoom'),
     photos: state.photos,
   });
-  if (owner && data.github) {
-    selection = createSelection({
-      button: $('#select'),
-      root: $('#view'),
-      github: data.github,
-      getPhotos: () => state.photos,
-      onDeleted: removePhotos,
-    });
-  }
+  if (owner) selection = createSelection({ button: $('#select'), root: $('#view'), getPhotos: () => state.photos });
   document.addEventListener('click', onClick);
   bindPrefetch();
   addEventListener('hashchange', route);
@@ -94,16 +86,12 @@ async function loadPhotoList() {
 }
 
 function prepare(data, hidden = new Set()) {
-  const encode = (path) => path.split('/').map(encodeURIComponent).join('/');
-  const url = (path) => data.raw + encode(path);
-  // GitHub's own "delete this file" page (asks the visitor to sign in; only the owner can commit).
-  const del = data.github && ((path) => `https://github.com/${data.github.repo}/delete/${data.github.branch}/${encode(path)}`);
+  const url = (path) => data.raw + path.split('/').map(encodeURIComponent).join('/');
   return data.items.filter((it) => !hidden.has(it.id)).map((it, index) => ({
     ...it,
     index,
     src: url(it.path),
     liveSrc: it.live ? url(it.live) : null,
-    deleteUrls: del ? { photo: del(it.path), video: it.live ? del(it.live) : null } : null,
     thumb: `m/${it.id}.webp`,
     name: it.path.split('/').pop(),
     day: it.taken ? it.taken.slice(0, 10) : 'unknown',

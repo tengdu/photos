@@ -348,7 +348,7 @@ async function main() {
   await writeFile(hashFile, JSON.stringify(hashes));
 
   items.sort((a, b) => instant(b.taken) - instant(a.taken) || (a.path < b.path ? 1 : -1));
-  const json = JSON.stringify({ raw: RAW_BASE, github: { repo: REPO, branch: BRANCH }, items });
+  const json = JSON.stringify({ raw: RAW_BASE, items });
   await writeFile(path.join(OUT, 'photos.json'), json);
   await bundle(sha1(json).slice(0, 10));
 

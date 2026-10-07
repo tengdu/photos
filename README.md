@@ -10,15 +10,9 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 
 > The repo is public: anyone can download the originals, including the GPS location stored in them.
 
-### Delete photos (from the phone or anywhere)
+### Delete photos
 
-Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on each device you use; `?owner=off` turns it off again.
-
-- **Several at once:** in All Photos or Days, tap **Select**, tap the photos (or **Select All**), then **Delete** → **Delete with Shortcut**. The site starts the **Delete from GitHub** shortcut below with the list of files (Live Photo videos included); it deletes them and Shortcuts returns to the site, where they disappear at once. The site rebuilds once, about 2 minutes after the last deletion.
-  On a computer without Shortcuts (or via **Use a GitHub token in this browser instead**), paste a token instead: fine-grained, this repository only, **Contents: Read and write**. It's kept only in that browser and deletes everything in one commit; **Forget the GitHub token on this device** removes it.
-- **One photo, without anything set up:** the photo's Info panel (ⓘ) has **Delete photo on GitHub…**, which opens GitHub's own delete page for that file (and its Live Photo video).
-
-Deleted files stay in the repository's Git history.
+Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on your iPhone, iPad or Mac; `?owner=off` turns it off again. Then, in All Photos or Days, tap **Select**, tap the photos (or **Select All**), **Delete** → **Delete with Shortcut**. The site starts the **Delete from GitHub** shortcut below with the list of files (Live Photo videos included); it deletes them, and Shortcuts returns to the site, where they disappear at once. The site rebuilds once, about 2 minutes after the last deletion. Deleted files stay in the repository's Git history.
 
 ### Delete from GitHub shortcut
 
