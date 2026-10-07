@@ -14,10 +14,27 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 
 Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on each device you use; `?owner=off` turns it off again.
 
-- **Several at once:** in All Photos or Days, tap **Select**, tap the photos (or **Select All**), then **Delete**. The first time, paste a GitHub token that can change this repo (fine-grained, this repository only, **Contents: Read and write**; the upload shortcut's token works). It is kept only in that browser; **Forget the GitHub token on this device** in the delete dialog removes it. All selected photos, including Live Photo videos, are deleted in one commit, so the site rebuilds once (about 2 minutes); meanwhile they stay hidden on that device.
-- **One photo, without a token:** the photo's Info panel (ⓘ) has **Delete photo on GitHub…**, which opens GitHub's own delete page for that file (and its Live Photo video).
+- **Several at once:** in All Photos or Days, tap **Select**, tap the photos (or **Select All**), then **Delete** → **Delete with Shortcut**. The site starts the **Delete from GitHub** shortcut below with the list of files (Live Photo videos included); it deletes them and Shortcuts returns to the site, where they disappear at once. The site rebuilds once, about 2 minutes after the last deletion.
+  On a computer without Shortcuts (or via **Use a GitHub token in this browser instead**), paste a token instead: fine-grained, this repository only, **Contents: Read and write**. It's kept only in that browser and deletes everything in one commit; **Forget the GitHub token on this device** removes it.
+- **One photo, without anything set up:** the photo's Info panel (ⓘ) has **Delete photo on GitHub…**, which opens GitHub's own delete page for that file (and its Live Photo video).
 
 Deleted files stay in the repository's Git history.
+
+### Delete from GitHub shortcut
+
+Shortcuts app → **+** → name it exactly **Delete from GitHub**. The site gives it a list of file paths, one per line, as its input.
+
+| # | Action | Settings |
+|---|---|---|
+| 1 | **Text** | paste your GitHub token (the same one as the upload shortcut) → **Set Variable** `Token` |
+| 2 | **Split Text** | *Shortcut Input*, Separator: **New Lines** |
+| 3 | **Repeat with Each** | item in *Split Text* |
+| 4 | ↳ **Get Contents of URL** | URL `https://api.github.com/repos/tengdu/photos/contents/`**Repeat Item**, Method **GET**, Headers `Authorization` = `Bearer `**Token**, `Accept` = `application/vnd.github+json` |
+| 5 | ↳ **Get Dictionary Value** | Get **Value** for key `sha` in *Contents of URL* |
+| 6 | ↳ **Get Contents of URL** | the same URL, Method **DELETE**, the same Headers, Request Body **JSON**: `message` (Text) = `Delete `**Repeat Item**, `sha` (Text) = **Dictionary Value** |
+| 7 | **End Repeat** | |
+
+The first time it runs, iOS asks whether the shortcut may connect to api.github.com: choose **Always Allow**. If the shortcut runs but finds no files, open its **ⓘ** details, turn on **Show in Share Sheet** and set it to receive **Text**, so it accepts the list from the site.
 
 ### Hide places near home (optional)
 

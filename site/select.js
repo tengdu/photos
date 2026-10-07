@@ -1,9 +1,14 @@
-// Owner-only: select photos in All Photos / Days and delete them from the repository in one
-// commit. Uses a GitHub token that the owner pastes once; it's kept only in this browser.
+// Owner-only: select photos in All Photos / Days and delete them from the repository.
+// On iPhone/iPad/Mac the "Delete from GitHub" shortcut does it (it holds the GitHub token);
+// otherwise, or if preferred, a token pasted once into this browser deletes them in one commit.
 import { deleteFiles } from './github.js';
 import { count } from './format.js';
 
 const TOKEN_KEY = 'photos.token';
+const SHORTCUT = 'Delete from GitHub';
+const SETUP_URL = 'https://github.com/tengdu/photos#delete-from-github-shortcut';
+// Shortcuts can be started from a web page on iPhone, iPad (reports itself as Macintosh) and Mac.
+const HAS_SHORTCUTS = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent);
 const DELETED_KEY = 'photos.deleted';
 const HIDE_FOR_MS = 30 * 60 * 1000; // until the rebuilt site no longer lists them
 
@@ -24,7 +29,7 @@ export function recentlyDeleted() {
   return new Set(Object.keys(map));
 }
 
-function rememberDeleted(ids) {
+export function rememberDeleted(ids) {
   let map = {};
   try { map = JSON.parse(store.get(DELETED_KEY) || '{}'); } catch {}
   for (const id of ids) map[id] = Date.now();
@@ -32,6 +37,23 @@ function rememberDeleted(ids) {
 }
 
 let sessionToken = null; // used when this browser can't store it (private mode)
+
+/**
+ * x-callback-url that runs the "Delete from GitHub" shortcut with the files to delete (one path
+ * per line). Shortcuts then returns to the site: #/deleted/<ids> on success, #/delete-failed/<view>
+ * on error, or back to the view if cancelled.
+ */
+export function shortcutUrl({ base, view, photos }) {
+  const params = new URLSearchParams({
+    name: SHORTCUT,
+    input: 'text',
+    text: photos.flatMap((p) => [p.path, p.live].filter(Boolean)).join('\n'),
+    'x-success': `${base}#/deleted/${photos.map((p) => p.id).join(',')}`,
+    'x-cancel': `${base}#/${view}`,
+    'x-error': `${base}#/delete-failed/${view}`,
+  });
+  return `shortcuts://x-callback-url/run-shortcut?${params.toString().replace(/\+/g, '%20')}`;
+}
 
 export function createSelection({ button, root, github, getPhotos, onDeleted }) {
   const selected = new Set();
@@ -135,21 +157,26 @@ export function createSelection({ button, root, github, getPhotos, onDeleted }) 
     });
   }
 
+  // Resolves to 'shortcut', 'token' or false (cancelled).
   function confirmDelete(photos) {
     const videos = photos.filter((p) => p.live).length;
     const names = photos.slice(0, 4).map((p) => esc(p.name)).join(', ') + (photos.length > 4 ? `, and ${photos.length - 4} more` : '');
+    const hasToken = !!token();
     return new Promise((resolve) => {
       const s = openSheet(`<h3>Delete ${count(photos.length, 'Photo')}?</h3>
         <p>${names}</p>
         <p>${videos ? `Their ${count(videos, 'Live Photo video')} ${videos === 1 ? 'is' : 'are'} deleted too. ` : ''}They are removed from the
-          site and the repository in one change; the site updates about 2 minutes later. (The files stay in the repository's history.)</p>
+          site and the repository; the site updates about 2 minutes later. (The files stay in the repository's history.)</p>
         <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Cancel</button>
-          <button type="button" class="sheet-btn sheet-danger" data-act="ok">Delete</button></div>
-        <button type="button" class="sheet-link" data-act="forget">Forget the GitHub token on this device</button>`);
+          <button type="button" class="sheet-btn sheet-danger" data-act="${HAS_SHORTCUTS ? 'shortcut' : 'token'}">${HAS_SHORTCUTS ? 'Delete with Shortcut' : 'Delete'}</button></div>
+        ${HAS_SHORTCUTS ? `<p class="sheet-small sheet-note">Runs your “${SHORTCUT}” shortcut, which already has your GitHub token, then comes back here.
+          <a href="${SETUP_URL}" target="_blank" rel="noopener">How to set up the shortcut</a></p>
+          <button type="button" class="sheet-link" data-act="token">Use a GitHub token in this browser instead</button>` : ''}
+        ${hasToken ? '<button type="button" class="sheet-link" data-act="forget">Forget the GitHub token on this device</button>' : ''}`);
       s.onclick = (e) => {
         const act = e.target.closest('[data-act]')?.dataset.act;
         if (act === 'cancel') { closeSheet(); resolve(false); }
-        if (act === 'ok') resolve(true);
+        if (act === 'shortcut' || act === 'token') resolve(act);
         if (act === 'forget') {
           store.del(TOKEN_KEY);
           sessionToken = null;
@@ -161,13 +188,26 @@ export function createSelection({ button, root, github, getPhotos, onDeleted }) 
     });
   }
 
+  function runShortcut(photos) {
+    const view = /^#\/(all|days)/.exec(location.hash)?.[1] || 'all';
+    try { sessionStorage.setItem('photos.returnView', view); } catch {}
+    closeSheet();
+    setActive(false);
+    location.href = shortcutUrl({ base: `${location.origin}${location.pathname}`, view, photos });
+  }
+
   async function startDelete() {
     const byId = new Map(getPhotos().map((p) => [p.id, p]));
     const photos = [...selected].map((id) => byId.get(id)).filter(Boolean);
     if (!photos.length) return;
+    const how = await confirmDelete(photos);
+    if (how === 'shortcut') return runShortcut(photos);
+    if (how === 'token') return deleteWithToken(photos);
+  }
+
+  async function deleteWithToken(photos) {
     let tok = token() || (await askToken());
     if (!tok) return;
-    if (!(await confirmDelete(photos))) return;
     const paths = photos.flatMap((p) => [p.path, p.live].filter(Boolean));
     const message = photos.length === 1 ? `Delete ${photos[0].name}` : `Delete ${photos.length} photos\n\n${photos.map((p) => p.name).join('\n')}`;
     for (;;) {
@@ -212,6 +252,7 @@ export function createSelection({ button, root, github, getPhotos, onDeleted }) 
       if (!on && active) setActive(false);
     },
     refresh: render,
+    toast: showToast,
   };
 }
 

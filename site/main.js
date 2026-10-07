@@ -2,7 +2,7 @@ import './styles.css';
 import { Library, VIEWS } from './library.js';
 import { openViewer, closeViewer, isOpen } from './viewer.js';
 import { loadOriginal } from './original.js';
-import { createSelection, recentlyDeleted } from './select.js';
+import { createSelection, recentlyDeleted, rememberDeleted } from './select.js';
 
 const $ = (s) => document.querySelector(s);
 const state = { photos: [], byId: new Map(), view: 'all', viewerFromApp: false, viewerList: null, mapActive: false, libraryScroll: 0 };
@@ -113,8 +113,9 @@ function prepare(data, hidden = new Set()) {
 }
 
 function parseRoute() {
-  const [, kind, arg] = /^#\/([a-z]+)(?:\/(.+))?$/.exec(location.hash) || [];
+  const [, kind, arg] = /^#\/([a-z-]+)(?:\/(.+))?$/.exec(location.hash) || [];
   if (kind === 'photo') return { photo: arg };
+  if (kind === 'deleted' || kind === 'delete-failed') return { shortcut: kind, arg: arg || '' };
   if (kind === 'map') return { view: 'map', focus: arg };
   if (VIEWS.includes(kind)) return { view: kind, anchor: arg };
   return { view: state.view };
@@ -122,6 +123,7 @@ function parseRoute() {
 
 function route() {
   const r = parseRoute();
+  if (r.shortcut) return shortcutReturned(r);
   if (r.photo) {
     const p = state.byId.get(r.photo);
     if (!p) return location.replace(`#/${state.view}`);
@@ -147,6 +149,22 @@ function route() {
   if (state.mapActive) hideMapView();
   library.show(r.view, r.anchor);
   selection?.refresh();
+}
+
+// Back from the "Delete from GitHub" shortcut (see select.js).
+function shortcutReturned({ shortcut, arg }) {
+  let view = 'all';
+  try { view = sessionStorage.getItem('photos.returnView') || view; } catch {}
+  if (shortcut === 'deleted' && selection) {
+    const ids = new Set(arg.split(',').filter((id) => state.byId.has(id)));
+    rememberDeleted(ids);
+    removePhotos(ids);
+    selection.toast(`Deleted ${ids.size} photo${ids.size === 1 ? '' : 's'}. The site updates in about 2 minutes.`);
+  } else if (shortcut === 'delete-failed' && selection) {
+    const reason = new URLSearchParams(arg.split('?')[1] || '').get('errorMessage');
+    selection.toast(`The “Delete from GitHub” shortcut didn't finish${reason ? `: ${reason}` : '.'} Nothing was hidden.`);
+  }
+  location.replace(`#/${view}`);
 }
 
 // After deleting: drop the photos everywhere and redraw.

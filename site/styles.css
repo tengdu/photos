@@ -458,6 +458,7 @@ html[data-selecting] .tile.selected::after {
 .sheet-btn { flex: 1; height: 42px; border: 0; border-radius: 12px; background: var(--pill); font-size: 15px; font-weight: 600; cursor: pointer; }
 .sheet-primary { background: var(--accent); color: #fff; }
 .sheet-danger { background: #ff3b30; color: #fff; }
+.sheet-note { margin: 12px 0 0 !important; }
 .sheet-link { display: block; margin: 14px auto 0; border: 0; background: none; color: var(--fg-2); font-size: 13px; text-decoration: underline; cursor: pointer; }
 .busy { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 10px 0; }
 .busy p { margin: 0; }
