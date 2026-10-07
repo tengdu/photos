@@ -10,7 +10,25 @@ let mapModule;
 
 boot();
 
+// "?owner" marks this browser as the owner's (shows Delete links in the Info panel); "?owner=off" undoes it.
+function ownerMode() {
+  const params = new URLSearchParams(location.search);
+  try {
+    if (params.has('owner')) {
+      if (params.get('owner') === 'off') localStorage.removeItem('photos.owner');
+      else localStorage.setItem('photos.owner', '1');
+      params.delete('owner');
+      const query = params.toString();
+      history.replaceState(null, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+    }
+    return localStorage.getItem('photos.owner') === '1';
+  } catch {
+    return params.has('owner') && params.get('owner') !== 'off';
+  }
+}
+
 async function boot() {
+  if (ownerMode()) document.documentElement.dataset.owner = '';
   // Expose the header height to CSS (the map sits behind the translucent header).
   new ResizeObserver(([e]) => document.documentElement.style.setProperty('--top-h', `${e.target.offsetHeight}px`)).observe($('.top'));
   try {
@@ -62,12 +80,16 @@ async function loadPhotoList() {
 }
 
 function prepare(data) {
-  const url = (path) => data.raw + path.split('/').map(encodeURIComponent).join('/');
+  const encode = (path) => path.split('/').map(encodeURIComponent).join('/');
+  const url = (path) => data.raw + encode(path);
+  // GitHub's own "delete this file" page (asks the visitor to sign in; only the owner can commit).
+  const del = data.github && ((path) => `https://github.com/${data.github.repo}/delete/${data.github.branch}/${encode(path)}`);
   return data.items.map((it, index) => ({
     ...it,
     index,
     src: url(it.path),
     liveSrc: it.live ? url(it.live) : null,
+    deleteUrls: del ? { photo: del(it.path), video: it.live ? del(it.live) : null } : null,
     thumb: `m/${it.id}.webp`,
     name: it.path.split('/').pop(),
     day: it.taken ? it.taken.slice(0, 10) : 'unknown',

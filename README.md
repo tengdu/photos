@@ -10,6 +10,10 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 
 > The repo is public: anyone can download the originals, including the GPS location stored in them.
 
+### Delete a photo (from the phone or anywhere)
+
+Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on each device you use. That shows **Delete photo on GitHub…** in a photo's Info panel (ⓘ). It opens GitHub's delete page for that file; confirm with **Commit changes** (you must be signed in to GitHub), and for a Live Photo also delete its video. The site updates about 2 minutes later. `?owner=off` hides the links again. Deleted files stay in the repo's Git history.
+
 ### Hide places near home (optional)
 
 Add a repository secret **`PRIVACY_ZONES`** in Settings → Secrets and variables → Actions. Its value is one or more `latitude,longitude,radius_in_metres` entries separated by `;`, for example `47.61,-122.33,1000`. Photos taken inside these areas keep their city name, but their coordinates are left out of the website (the original files still contain GPS). The value stays private; the build log only prints how many zones are set.

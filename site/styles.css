@@ -359,6 +359,15 @@ button { font: inherit; color: inherit; }
 .vi-exp span { flex: 1; padding: 9px 4px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
 .vi-exp span + span { border-left: 0.5px solid rgba(255, 255, 255, 0.12); }
 .vi-file { margin-top: 12px; font-size: 13px; color: #a1a1a6; word-break: break-all; }
+.vi-owner { margin-top: 18px; padding-top: 14px; border-top: 0.5px solid rgba(255, 255, 255, 0.12); display: flex; flex-direction: column; gap: 8px; }
+.vi-delete {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px 12px; border-radius: 10px;
+  background: rgba(255, 69, 58, 0.16); color: #ff6961;
+  font-size: 14px; font-weight: 600;
+}
+.vi-delete:hover { background: rgba(255, 69, 58, 0.26); }
+.vi-owner p { margin: 2px 0 0; font-size: 12px; color: #8e8e93; }
 
 .ring.spin {
   background: conic-gradient(#fff 0 25%, rgba(255, 255, 255, 0.25) 0);

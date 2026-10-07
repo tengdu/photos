@@ -456,7 +456,12 @@ function renderInfo() {
       <div class="vi-specs"><span>${megapixels(p.w, p.h)}</span><span>${p.w} × ${p.h}</span><span>${fileSize(p.size)}</span></div>
       ${exp.length ? `<div class="vi-exp">${exp.map((x) => `<span>${esc(x)}</span>`).join('')}</div>` : ''}
     </section>
-    <div class="vi-file">${esc(p.name)}${p.liveSrc ? ' · Live Photo' : ''}</div>`;
+    <div class="vi-file">${esc(p.name)}${p.liveSrc ? ' · Live Photo' : ''}</div>
+    ${'owner' in document.documentElement.dataset && p.deleteUrls ? `<section class="vi-owner">
+      <a class="vi-delete" href="${esc(p.deleteUrls.photo)}" target="_blank" rel="noopener">${TRASH_ICON}<span>Delete photo on GitHub…</span></a>
+      ${p.deleteUrls.video ? `<a class="vi-delete" href="${esc(p.deleteUrls.video)}" target="_blank" rel="noopener">${TRASH_ICON}<span>Delete Live Photo video…</span></a>` : ''}
+      <p>Opens GitHub's delete page; confirm with “Commit changes”. The photo disappears from the site about 2 minutes later.${p.deleteUrls.video ? ' Delete both files for a Live Photo.' : ''}</p>
+    </section>` : ''}`;
   if (p.geo) showMiniMap(ui.panel.querySelector('.vi-map'), p);
 }
 
@@ -491,4 +496,5 @@ const SOUND_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden=
 const MUTED_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16.5 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const INFO_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.6" r="1.25" fill="currentColor"/></svg>';
 const PIN_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" fill="currentColor"/><circle cx="12" cy="10" r="2.4" fill="var(--panel-bg, #1c1c1e)"/></svg>';
+const TRASH_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 7h16M9 7V4.8h6V7m-8.5 0 .9 12.2h9.2L17.5 7M10 11v5m4-5v5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
