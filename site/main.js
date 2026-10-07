@@ -2,10 +2,12 @@ import './styles.css';
 import { Library, VIEWS } from './library.js';
 import { openViewer, closeViewer, isOpen } from './viewer.js';
 import { loadOriginal } from './original.js';
+import { createSelection, recentlyDeleted } from './select.js';
 
 const $ = (s) => document.querySelector(s);
 const state = { photos: [], byId: new Map(), view: 'all', viewerFromApp: false, viewerList: null, mapActive: false, libraryScroll: 0 };
 let library;
+let selection = null; // owner only
 let mapModule;
 
 boot();
@@ -28,11 +30,14 @@ function ownerMode() {
 }
 
 async function boot() {
-  if (ownerMode()) document.documentElement.dataset.owner = '';
+  const owner = ownerMode();
+  if (owner) document.documentElement.dataset.owner = '';
   // Expose the header height to CSS (the map sits behind the translucent header).
   new ResizeObserver(([e]) => document.documentElement.style.setProperty('--top-h', `${e.target.offsetHeight}px`)).observe($('.top'));
+  let data;
   try {
-    state.photos = prepare(await loadPhotoList());
+    data = await loadPhotoList();
+    state.photos = prepare(data, recentlyDeleted());
   } catch (e) {
     if (e.message === 'reloading') return;
     $('#view').innerHTML = `<p class="empty">Couldn't load the photo list.<br><span>${String(e.message)}</span></p>`;
@@ -47,6 +52,15 @@ async function boot() {
     zoom: $('#zoom'),
     photos: state.photos,
   });
+  if (owner && data.github) {
+    selection = createSelection({
+      button: $('#select'),
+      root: $('#view'),
+      github: data.github,
+      getPhotos: () => state.photos,
+      onDeleted: removePhotos,
+    });
+  }
   document.addEventListener('click', onClick);
   bindPrefetch();
   addEventListener('hashchange', route);
@@ -79,12 +93,12 @@ async function loadPhotoList() {
   return res.ok ? res.json() : list;
 }
 
-function prepare(data) {
+function prepare(data, hidden = new Set()) {
   const encode = (path) => path.split('/').map(encodeURIComponent).join('/');
   const url = (path) => data.raw + encode(path);
   // GitHub's own "delete this file" page (asks the visitor to sign in; only the owner can commit).
   const del = data.github && ((path) => `https://github.com/${data.github.repo}/delete/${data.github.branch}/${encode(path)}`);
-  return data.items.map((it, index) => ({
+  return data.items.filter((it) => !hidden.has(it.id)).map((it, index) => ({
     ...it,
     index,
     src: url(it.path),
@@ -128,9 +142,19 @@ function route() {
   if (isOpen()) closeViewer(); // e.g. the browser's Back button while the viewer is open
   state.view = r.view;
   setDock(r.view);
+  selection?.setAvailable(r.view === 'all' || r.view === 'days');
   if (r.view === 'map') return showMapView(r.focus);
   if (state.mapActive) hideMapView();
   library.show(r.view, r.anchor);
+  selection?.refresh();
+}
+
+// After deleting: drop the photos everywhere and redraw.
+function removePhotos(ids) {
+  state.photos = state.photos.filter((p) => !ids.has(p.id)).map((p, index) => ({ ...p, index }));
+  state.byId = new Map(state.photos.map((p) => [p.id, p]));
+  library.setPhotos(state.photos);
+  mapModule?.resetMap();
 }
 
 function setDock(view) {
@@ -188,6 +212,7 @@ function onClick(e) {
   const tile = e.target.closest('.tile');
   if (!tile) return;
   e.preventDefault();
+  if (selection?.active && tile.closest('#view')) return selection.toggle(tile.dataset.id);
   const hash = `#/photo/${tile.dataset.id}`;
   // If a photo is still in the URL (viewer closing), replace it instead of stacking history.
   if (location.hash.startsWith('#/photo/')) location.replace(hash);
@@ -203,6 +228,7 @@ function onClick(e) {
 function bindPrefetch() {
   if (navigator.connection?.saveData) return;
   const prefetch = (tile) => {
+    if (selection?.active) return;
     const p = tile && state.byId.get(tile.dataset.id);
     if (p) loadOriginal(p).catch(() => {});
   };

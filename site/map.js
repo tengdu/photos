@@ -29,6 +29,16 @@ export function showMap(options) {
   });
 }
 
+/** Forget the map so the next showMap() builds it again from the current photos. */
+export function resetMap() {
+  for (const marker of pins.values()) marker.remove();
+  pins.clear();
+  map?.remove();
+  map = null;
+  ready = null;
+  if (root) root.innerHTML = '';
+}
+
 export function hideMap() {
   if (root) root.hidden = true;
   closeSheet();

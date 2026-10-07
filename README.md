@@ -10,9 +10,14 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 
 > The repo is public: anyone can download the originals, including the GPS location stored in them.
 
-### Delete a photo (from the phone or anywhere)
+### Delete photos (from the phone or anywhere)
 
-Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on each device you use. That shows **Delete photo on GitHub…** in a photo's Info panel (ⓘ). It opens GitHub's delete page for that file; confirm with **Commit changes** (you must be signed in to GitHub), and for a Live Photo also delete its video. The site updates about 2 minutes later. `?owner=off` hides the links again. Deleted files stay in the repo's Git history.
+Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on each device you use; `?owner=off` turns it off again.
+
+- **Several at once:** in All Photos or Days, tap **Select**, tap the photos (or **Select All**), then **Delete**. The first time, paste a GitHub token that can change this repo (fine-grained, this repository only, **Contents: Read and write**; the upload shortcut's token works). It is kept only in that browser; **Forget the GitHub token on this device** in the delete dialog removes it. All selected photos, including Live Photo videos, are deleted in one commit, so the site rebuilds once (about 2 minutes); meanwhile they stay hidden on that device.
+- **One photo, without a token:** the photo's Info panel (ⓘ) has **Delete photo on GitHub…**, which opens GitHub's own delete page for that file (and its Live Photo video).
+
+Deleted files stay in the repository's Git history.
 
 ### Hide places near home (optional)
 

@@ -116,6 +116,16 @@ export class Library {
     this.updateTitle();
   }
 
+  /** Replace the photo list (e.g. after deleting some) and redraw the current view in place. */
+  setPhotos(photos) {
+    this.photos = photos;
+    const { view } = this;
+    const y = scrollY;
+    this.view = null;
+    this.show(view);
+    scrollTo(0, y);
+  }
+
   // The thumbnail <img> for a photo, if it's in the current view (for the zoom animation).
   thumbFor(id) {
     return this.root.querySelector(`.tile[data-id="${id}"] img`);
