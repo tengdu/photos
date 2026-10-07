@@ -3,7 +3,6 @@
 import { count } from './format.js';
 
 const SHORTCUT = 'Delete from GitHub';
-const SETUP_URL = 'https://github.com/tengdu/photos#delete-from-github-shortcut';
 // Shortcuts can be started from a web page on iPhone, iPad (reports itself as Macintosh) and Mac.
 const HAS_SHORTCUTS = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent);
 const DELETED_KEY = 'photos.deleted';
@@ -122,16 +121,11 @@ export function createSelection({ button, root, getPhotos }) {
     const byId = new Map(getPhotos().map((p) => [p.id, p]));
     const photos = [...selected].map((id) => byId.get(id)).filter(Boolean);
     if (!photos.length) return;
-    const videos = photos.filter((p) => p.live).length;
     const names = photos.slice(0, 4).map((p) => esc(p.name)).join(', ') + (photos.length > 4 ? `, and ${photos.length - 4} more` : '');
     sheet.innerHTML = `<h3>Delete ${count(photos.length, 'Photo')}?</h3>
       <p>${names}</p>
-      <p>${videos ? `Their ${count(videos, 'Live Photo video')} ${videos === 1 ? 'is' : 'are'} deleted too. ` : ''}They are removed from the
-        site and the repository; the site updates about 2 minutes later. (The files stay in the repository's history.)</p>
       <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Cancel</button>
-        <button type="button" class="sheet-btn sheet-danger" data-act="run">Delete with Shortcut</button></div>
-      <p class="sheet-small sheet-note">Runs your “${SHORTCUT}” shortcut, then comes back here.
-        <a href="${SETUP_URL}" target="_blank" rel="noopener">How to set up the shortcut</a></p>`;
+        <button type="button" class="sheet-btn sheet-danger" data-act="run">Delete with Shortcut</button></div>`;
     sheetWrap.hidden = false;
     sheet.onclick = (e) => {
       const act = e.target.closest('[data-act]')?.dataset.act;

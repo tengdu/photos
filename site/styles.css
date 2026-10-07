@@ -438,11 +438,9 @@ html[data-selecting] .tile.selected::after {
 .sheet p { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: var(--fg-2); word-break: break-word; }
 .sheet p b { color: var(--fg); }
 .sheet a { color: var(--accent); }
-.sheet-small { font-size: 13px !important; }
 .sheet-actions { display: flex; gap: 10px; }
 .sheet-btn { flex: 1; height: 42px; border: 0; border-radius: 12px; background: var(--pill); font-size: 15px; font-weight: 600; cursor: pointer; }
 .sheet-danger { background: #ff3b30; color: #fff; }
-.sheet-note { margin: 12px 0 0 !important; }
 .toast {
   position: fixed; z-index: 21;
   left: 50%; bottom: calc(76px + var(--safe-b)); transform: translateX(-50%);
