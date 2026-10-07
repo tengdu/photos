@@ -1,6 +1,6 @@
 // Owner-only: select photos in All Photos / Days and delete them with the "Delete from GitHub"
 // shortcut (iPhone, iPad, Mac). The shortcut holds the GitHub token; the site stores none.
-import { count } from './format.js';
+import { itemsLabel } from './format.js';
 
 const SHORTCUT = 'Delete from GitHub';
 // Shortcuts can be started from a web page on iPhone, iPad (reports itself as Macintosh) and Mac.
@@ -80,7 +80,7 @@ export function createSelection({ button, root, getPhotos }) {
     document.documentElement.toggleAttribute('data-selecting', active);
     button.textContent = active ? 'Cancel' : 'Select';
     bar.hidden = !active;
-    bar.querySelector('.sel-count').textContent = selected.size ? `${count(selected.size, 'Photo')} Selected` : 'Select Photos';
+    bar.querySelector('.sel-count').textContent = selected.size ? `${itemsLabel(chosen())} Selected` : 'Select Items';
     bar.querySelector('[data-act="delete"]').disabled = !selected.size;
     for (const tile of root.querySelectorAll('.tile')) tile.classList.toggle('selected', selected.has(tile.dataset.id));
   }
@@ -117,12 +117,17 @@ export function createSelection({ button, root, getPhotos }) {
     showToast.t = setTimeout(() => (toast.hidden = true), 5000);
   }
 
-  function confirmDelete() {
+  // The selected photos and videos.
+  function chosen() {
     const byId = new Map(getPhotos().map((p) => [p.id, p]));
-    const photos = [...selected].map((id) => byId.get(id)).filter(Boolean);
+    return [...selected].map((id) => byId.get(id)).filter(Boolean);
+  }
+
+  function confirmDelete() {
+    const photos = chosen();
     if (!photos.length) return;
     const names = photos.slice(0, 4).map((p) => esc(p.name)).join(', ') + (photos.length > 4 ? `, and ${photos.length - 4} more` : '');
-    sheet.innerHTML = `<h3>Delete ${count(photos.length, 'Photo')}?</h3>
+    sheet.innerHTML = `<h3>Delete ${itemsLabel(photos)}?</h3>
       <p>${names}</p>
       <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Cancel</button>
         <button type="button" class="sheet-btn sheet-danger" data-act="run">Delete with Shortcut</button></div>`;

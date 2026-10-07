@@ -1,9 +1,10 @@
 // Full-screen viewer (PhotoSwipe). Every slide ends up showing the ORIGINAL file; the 720px
-// preview is only the placeholder while the original downloads/decodes.
+// preview is only the placeholder while the original downloads/decodes (or, for a video, the
+// poster until it plays).
 import PhotoSwipe from 'photoswipe';
 import 'photoswipe/style.css';
 import { loadOriginal, peek, progress, timing } from './original.js';
-import { takenLabel, placeLabel, fileSize, megapixels, exposure } from './format.js';
+import { takenLabel, placeLabel, fileSize, megapixels, exposure, duration, resolution } from './format.js';
 import { loadMaplibre, mapStyle } from './maplib.js';
 
 const saveData = !!navigator.connection?.saveData;
@@ -11,11 +12,13 @@ const finePointer = matchMedia('(hover: hover) and (pointer: fine)');
 const status = new Map(); // id -> { state: 'loading' | 'done' | 'error', loaded, total }
 let pswp = null; // the current viewer instance
 let pendingOpen = null;
-let soundOn = false;
+let soundOn = false; // Live Photos play muted unless sound is turned on
+let videoSound = true; // videos play with sound (if the browser allows it without a tap)
 let infoOpen = false;
 let ui = null;
 let mini = null; // { map, marker } for the Info panel
 const PANEL_W = 340;
+const CONTROLS_H = 64; // a video's own controls along its bottom edge: drags there aren't swipes
 
 const closingViewers = new WeakSet();
 export const isOpen = () => !!pswp && !closingViewers.has(pswp);
@@ -35,7 +38,7 @@ export function openViewer(args) {
 function create({ photos, index, thumbFor, onChange, onClosed }) {
   const dpr = window.devicePixelRatio || 1;
   const viewer = new PhotoSwipe({
-    dataSource: photos.map((p) => ({ src: p.src, msrc: p.thumb, width: p.w, height: p.h, alt: p.name, thumbCropped: true, photo: p })),
+    dataSource: photos.map((p) => ({ src: p.src, msrc: p.thumb, width: p.w, height: p.h, alt: p.name, thumbCropped: true, photo: p, ...(p.video && { type: 'video' }) })),
     index,
     bgOpacity: 1,
     showHideAnimationType: 'zoom',
@@ -55,10 +58,13 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
     arrowPrevTitle: 'Previous (←)',
     arrowNextTitle: 'Next (→)',
     errorMsg: 'The original could not be displayed.',
-    paddingFn: (viewport) => {
+    paddingFn: (viewport, data) => {
       const pad = viewport.x < 700 ? { top: 0, bottom: 0, left: 0, right: 0 } : { top: 64, bottom: 72, left: 16, right: 16 };
+      // On phones a photo runs under the bars; a video stays clear of them, so its controls can be used.
+      const bars = data?.photo?.video && viewport.x < 700;
+      if (bars) Object.assign(pad, { top: pswp?.topBar?.offsetHeight || 60, bottom: ui?.bar?.offsetHeight || 56 });
       if (infoOpen && viewport.x >= 900) pad.right = PANEL_W + 16;
-      else if (infoOpen) pad.bottom = Math.round(viewport.y * 0.48);
+      else if (infoOpen) pad.bottom = Math.round(viewport.y * 0.48) + (bars ? pad.bottom : 0);
       return pad;
     },
   });
@@ -68,12 +74,18 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
   viewer.addFilter('placeholderSrc', (src, content) => content.data.msrc || src);
   viewer.addFilter('thumbEl', (el, data) => thumbFor(data.photo.id) || el);
   viewer.addFilter('contentErrorElement', (el, content) => errorElement(content.data.photo));
+  // Videos open with the same zoom from their thumbnail as photos.
+  viewer.addFilter('useContentPlaceholder', (use, content) => use || !!content.data.photo?.video);
 
   viewer.on('contentLoad', (e) => {
     const { content } = e;
     const p = content.data.photo;
     if (!p) return;
     e.preventDefault();
+    if (p.video) {
+      loadVideo(viewer, content, p);
+      return;
+    }
     const wrap = document.createElement('div');
     wrap.className = 'pswp__img orig';
     content.element = wrap;
@@ -97,20 +109,35 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
         if (content.element === wrap) content.onError();
       });
   });
-  viewer.on('contentDestroy', ({ content }) => content.element?.querySelector('video')?.removeAttribute('src'));
+  viewer.on('contentDestroy', ({ content }) => {
+    for (const v of content.element?.querySelectorAll?.('video') || []) {
+      v.pause();
+      v.removeAttribute('src');
+      v.querySelectorAll('source').forEach((el) => el.remove());
+      v.load(); // stops the download
+    }
+  });
+  viewer.on('pointerDown', (e) => {
+    const video = currentClip();
+    if (!video) return;
+    const r = video.getBoundingClientRect();
+    const { clientX: x, clientY: y } = e.originalEvent;
+    if (x >= r.left && x <= r.right && y <= r.bottom && y >= r.bottom - CONTROLS_H) e.preventDefault();
+  });
 
   viewer.on('uiRegister', registerUI);
   viewer.on('change', () => {
-    stopAllLive();
+    stopAllMedia();
     const p = photos[viewer.currIndex];
     if (p) openedAt.set(p.id, performance.now());
     // A neighbour that was waiting as a background prefetch is needed now: start it.
-    if (p && !peek(p.id)) loadOriginal(p, { priority: 'high' }).catch(() => {});
+    if (p && !p.video && !peek(p.id)) loadOriginal(p, { priority: 'high' }).catch(() => {});
     onChange(viewer.currIndex);
     updateUI();
     renderInfo();
     activateLive();
-    if (p && peek(p.id)) logShown(p);
+    activateClip();
+    if (p && !p.video && peek(p.id)) logShown(p);
   });
   viewer.on('tapAction', (e) => {
     if (press?.held) e.preventDefault();
@@ -120,7 +147,9 @@ function create({ photos, index, thumbFor, onChange, onClosed }) {
   viewer.on('close', () => {
     closingViewers.add(viewer);
     try {
-      stopAllLive();
+      stopAllMedia();
+      const clip = currentClip();
+      if (clip) clip.controls = false; // no controls in the zoom back to the thumbnail
       const p = photos[viewer.currIndex];
       if (p) thumbFor(p.id)?.scrollIntoView({ block: 'nearest' }); // zoom back into a visible tile
     } catch (e) {
@@ -217,7 +246,7 @@ async function mount(wrap, p, result) {
 // ---- Live Photos (original .mov) ----
 
 function currentVideo() {
-  return pswp?.currSlide?.content?.element?.querySelector('video') || null;
+  return pswp?.currSlide?.content?.element?.querySelector?.('video.live-video') || null;
 }
 
 function setPlaying(video, on) {
@@ -248,11 +277,12 @@ function stopLive() {
   setPlaying(video, false);
 }
 
-function stopAllLive() {
+function stopAllMedia() {
   document.querySelectorAll('.pswp video.live-video').forEach((v) => {
     v.pause();
     v.classList.remove('playing');
   });
+  document.querySelectorAll('.pswp video.orig-video').forEach((v) => v.pause());
   ui?.live.classList.remove('on');
 }
 
@@ -264,6 +294,88 @@ function activateLive() {
   // Like Photos: play the motion once (muted) when a Live Photo comes into view.
   const slide = pswp.currSlide;
   if (slide.currZoomLevel <= slide.zoomLevels.initial * 1.01) playLive({ withSound: false });
+}
+
+// ---- Videos (the original file, streamed by the browser) ----
+
+// Safari only plays a file served as "application/octet-stream" (as GitHub serves release files)
+// when told its type; Chrome rejects "video/quicktime" but plays .mov files given as MP4.
+const probe = document.createElement('video');
+const videoType = (p) => (p.fmt === 'mov' && probe.canPlayType('video/quicktime') ? 'video/quicktime' : 'video/mp4');
+
+function loadVideo(viewer, content, p) {
+  const wrap = document.createElement('div');
+  wrap.className = 'orig orig-clip';
+  const poster = new Image(); // the preview, until the video shows its first frame
+  poster.className = 'orig-media';
+  poster.alt = '';
+  poster.src = p.thumb;
+  const video = document.createElement('video');
+  video.className = 'orig-media orig-video';
+  video.controls = true;
+  video.playsInline = true;
+  video.preload = 'none'; // neighbours don't download until they're shown
+  video.poster = p.thumb;
+  const source = document.createElement('source');
+  source.src = p.src;
+  source.type = videoType(p);
+  video.append(source);
+  const failed = () => {
+    if (content.element !== wrap || content.state === 'error') return;
+    setStatus(p.id, { state: 'error' });
+    content.onError(); // shows errorElement(): a message and the download link
+  };
+  source.addEventListener('error', failed);
+  video.addEventListener('error', failed);
+  // Remember the choice made with the video's own mute button for the next video.
+  video.addEventListener('volumechange', () => {
+    if (String(video.muted) === video.dataset.muted) return; // set by setMuted()
+    video.dataset.muted = video.muted;
+    if (video !== currentClip()) return;
+    videoSound = !video.muted;
+    updateUI();
+  });
+  wrap.append(poster, video);
+  content.element = wrap;
+  content.state = 'loading';
+  const ready = () => {
+    if (content.element !== wrap) return;
+    content.onLoaded();
+    if (viewer.currSlide?.content === content) activateClip();
+  };
+  if (poster.complete) setTimeout(ready);
+  else poster.onload = poster.onerror = ready;
+}
+
+function currentClip() {
+  return pswp?.currSlide?.content?.element?.querySelector?.('video.orig-video') || null;
+}
+
+const setMuted = (video, muted) => {
+  video.dataset.muted = muted;
+  video.muted = muted;
+};
+
+// Like Photos, a video plays when it comes into view: with sound if the browser allows it
+// without a tap (and sound is on), otherwise muted.
+function activateClip() {
+  const video = currentClip();
+  if (!video) return;
+  video.preload = 'auto';
+  playClip(video);
+}
+
+function playClip(video) {
+  if (video.ended) video.currentTime = 0;
+  setMuted(video, !videoSound);
+  video.play()
+    .catch((e) => {
+      if (e.name !== 'NotAllowedError' || video.muted) throw e;
+      setMuted(video, true); // sound needs a tap first; the sound button gives it
+      return video.play();
+    })
+    .then(updateUI)
+    .catch(() => {});
 }
 
 let press = null;
@@ -333,7 +445,7 @@ function registerUI() {
       if (DEBUG) el.classList.add('v-debug'); // let the timing line wrap instead of being cut off
       el.innerHTML = `
         <button class="v-btn v-live" type="button" title="Play Live Photo (Space) — or press and hold the photo">${LIVE_ICON}<span>LIVE</span></button>
-        <button class="v-btn v-sound" type="button" aria-pressed="false" title="Sound for Live Photos">${MUTED_ICON}</button>
+        <button class="v-btn v-sound" type="button" aria-pressed="false" title="Sound">${MUTED_ICON}</button>
         <span class="v-status" aria-live="polite"></span>
         <button class="v-btn v-info" type="button" aria-pressed="false" title="Info (I)">${INFO_ICON}</button>
         <a class="v-btn v-download" target="_blank" rel="noopener" title="Download the original file" download>${DOWNLOAD_ICON}<span>Original</span></a>`;
@@ -351,9 +463,15 @@ function registerUI() {
       ui.live.addEventListener('pointerenter', (e) => e.pointerType === 'mouse' && finePointer.matches && playLive());
       ui.live.addEventListener('pointerleave', (e) => e.pointerType === 'mouse' && stopLive());
       ui.sound.addEventListener('click', () => {
-        soundOn = !soundOn;
-        const v = currentVideo();
-        if (v) v.muted = !soundOn;
+        const clip = currentClip();
+        if (clip) {
+          videoSound = clip.muted; // from what's playing: it may have been muted for autoplay
+          setMuted(clip, !videoSound);
+        } else {
+          soundOn = !soundOn;
+          const v = currentVideo();
+          if (v) v.muted = !soundOn;
+        }
         updateUI();
       });
       updateUI();
@@ -368,10 +486,12 @@ function updateUI() {
   const where = placeLabel(p.place);
   if (ui.title) ui.title.innerHTML = `<strong>${esc(when.date)}</strong><span>${esc([when.time, where].filter(Boolean).join(' · '))}</span>`;
   const live = !!p.liveSrc && !p.liveFailed;
-  ui.live.hidden = ui.sound.hidden = !live;
-  ui.sound.innerHTML = soundOn ? SOUND_ICON : MUTED_ICON;
-  ui.sound.setAttribute('aria-pressed', String(soundOn));
-  ui.sound.setAttribute('aria-label', soundOn ? 'Sound on' : 'Sound off');
+  ui.live.hidden = !live;
+  ui.sound.hidden = !live && !p.video;
+  const sound = p.video ? !(currentClip()?.muted ?? !videoSound) : soundOn;
+  ui.sound.innerHTML = sound ? SOUND_ICON : MUTED_ICON;
+  ui.sound.setAttribute('aria-pressed', String(sound));
+  ui.sound.setAttribute('aria-label', sound ? 'Sound on' : 'Sound off');
   ui.download.href = p.src;
   renderStatus(p);
 }
@@ -386,6 +506,14 @@ progress.addEventListener('progress', ({ detail }) => setStatus(detail.id, { sta
 
 function renderStatus(p) {
   if (!ui?.status) return;
+  if (p.video) {
+    const failed = status.get(p.id)?.state === 'error';
+    ui.status.classList.remove('is-loading');
+    ui.status.classList.toggle('is-error', failed);
+    if (failed) ui.status.textContent = "This browser can't play this video";
+    else ui.status.innerHTML = `<b>Original</b> · ${p.fmt.toUpperCase()} · ${resolution(p.w, p.h)} · ${duration(p.video.dur)} · ${fileSize(p.size)}`;
+    return;
+  }
   const s = peek(p.id) ? { state: 'done' } : status.get(p.id) || { state: 'loading', loaded: 0, total: p.size };
   const fmt = p.fmt === 'jpg' ? 'JPEG' : p.fmt.toUpperCase();
   const info = `${fmt} · ${p.w} × ${p.h} · ${fileSize(p.size)}`;
@@ -405,7 +533,7 @@ function renderStatus(p) {
 function errorElement(p) {
   const el = document.createElement('div');
   el.className = 'pswp__error-msg-container';
-  el.innerHTML = `<div class="v-error"><p>This browser couldn't display the original file.</p>
+  el.innerHTML = `<div class="v-error"><p>${p.video ? "This browser can't play this video." : "This browser couldn't display the original file."}</p>
     <a class="v-btn" href="${esc(p.src)}" target="_blank" rel="noopener" download>${DOWNLOAD_ICON}<span>Download original</span></a></div>`;
   return el;
 }
@@ -416,7 +544,13 @@ function onKey(e) {
     toggleInfo();
     return;
   }
-  if (e.key === ' ' && currentVideo()) {
+  if (e.key === ' ' && currentClip()) {
+    if (e.target === currentClip()) return; // its own controls have the focus and handle it
+    e.preventDefault();
+    const clip = currentClip();
+    if (clip.paused) playClip(clip);
+    else clip.pause();
+  } else if (e.key === ' ' && currentVideo()) {
     e.preventDefault();
     currentVideo().classList.contains('playing') ? stopLive() : playLive();
   }
@@ -444,7 +578,11 @@ function renderInfo() {
   const camera = [cam.model?.startsWith(cam.make || '') ? '' : cam.make, cam.model].filter(Boolean).join(' ');
   const lens = cam.lens ? cam.lens[0].toUpperCase() + cam.lens.slice(1) : '';
   const fmt = p.fmt === 'jpg' ? 'JPEG' : p.fmt.toUpperCase();
-  const exp = [cam.iso && `ISO ${cam.iso}`, (cam.fl35 || cam.fl) && `${cam.fl35 || cam.fl} mm`, cam.f && `ƒ${cam.f}`, cam.exp && exposure(cam.exp)].filter(Boolean);
+  const v = p.video;
+  const exp = v
+    ? [v.codec, v.fps && `${v.fps} fps`, v.hdr, duration(v.dur)].filter(Boolean)
+    : [cam.iso && `ISO ${cam.iso}`, (cam.fl35 || cam.fl) && `${cam.fl35 || cam.fl} mm`, cam.f && `ƒ${cam.f}`, cam.exp && exposure(cam.exp)].filter(Boolean);
+  const specs = [v ? resolution(p.w, p.h) : megapixels(p.w, p.h), `${p.w} × ${p.h}`, fileSize(p.size)];
   ui.panel.innerHTML = `
     <div class="vi-head"><div><strong>${esc(when.date)}</strong><span>${esc(when.time)}</span></div>
       <button type="button" class="vi-close" aria-label="Close info">×</button></div>
@@ -453,10 +591,10 @@ function renderInfo() {
     <section class="vi-card">
       <div class="vi-cam"><strong>${esc(camera || 'Unknown camera')}</strong><span class="vi-badge">${fmt}</span></div>
       ${lens ? `<div class="vi-lens">${esc(lens)}</div>` : ''}
-      <div class="vi-specs"><span>${megapixels(p.w, p.h)}</span><span>${p.w} × ${p.h}</span><span>${fileSize(p.size)}</span></div>
+      <div class="vi-specs">${[...new Set(specs)].map((x) => `<span>${esc(x)}</span>`).join('')}</div>
       ${exp.length ? `<div class="vi-exp">${exp.map((x) => `<span>${esc(x)}</span>`).join('')}</div>` : ''}
     </section>
-    <div class="vi-file">${esc(p.name)}${p.liveSrc ? ' · Live Photo' : ''}</div>`;
+    <div class="vi-file">${esc(p.name)}${p.liveSrc ? ' · Live Photo' : ''}${v ? ' · Video' : ''}</div>`;
   if (p.geo) showMiniMap(ui.panel.querySelector('.vi-map'), p);
 }
 

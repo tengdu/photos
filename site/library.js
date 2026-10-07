@@ -1,6 +1,6 @@
 // Library views (Years / Months / Days / All Photos), rendered as plain HTML strings.
 import { thumbHashToDataURL } from 'thumbhash';
-import { dayLabel, monthLabel, monthName, placeLabel, count, rangeLabel } from './format.js';
+import { dayLabel, monthLabel, monthName, placeLabel, itemCount, rangeLabel, duration } from './format.js';
 
 export const VIEWS = ['years', 'months', 'days', 'all'];
 const TITLES = { years: 'Years', months: 'Months', days: 'Days', all: 'All Photos' };
@@ -37,6 +37,7 @@ export function tileHTML(p, eager = false) {
   return `<a class="tile" href="#/photo/${p.id}" data-id="${p.id}" data-th="${p.th || ''}" data-m="${p.month}" data-d="${p.day}">`
     + `<img src="${p.thumb}" alt="${esc(p.name)}" decoding="async" ${eager ? 'fetchpriority="high"' : 'loading="lazy"'}>`
     + (p.liveSrc ? `<span class="t-live" title="Live Photo">${LIVE}</span>` : '')
+    + (p.video ? `<span class="t-dur">${duration(p.video.dur)}</span>` : '')
     + '</a>';
 }
 
@@ -156,7 +157,7 @@ export class Library {
     } else if (this.view === 'all') {
       const t = el?.closest('.tile') || this.root.querySelector('.tile');
       title = label.month(t.dataset.m);
-      sub = count(this.photos.length, 'Photo');
+      sub = itemCount(this.photos);
     } else if (this.view === 'days') {
       const sec = el?.closest('.sec') || this.root.querySelector('.sec');
       title = label.day(sec.dataset.key);
@@ -164,7 +165,7 @@ export class Library {
     } else if (this.view === 'months') {
       const sec = el?.closest('.sec') || this.root.querySelector('.sec');
       title = label.year(sec.dataset.key);
-      sub = count(this.photos.filter((p) => p.year === sec.dataset.key).length, 'Photo');
+      sub = itemCount(this.photos.filter((p) => p.year === sec.dataset.key));
     } else {
       sub = rangeLabel(this.photos[0].taken, this.photos[this.photos.length - 1].taken);
     }

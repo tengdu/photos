@@ -3,6 +3,7 @@ import { Library, VIEWS } from './library.js';
 import { openViewer, closeViewer, isOpen } from './viewer.js';
 import { loadOriginal } from './original.js';
 import { createSelection, recentlyDeleted, rememberDeleted } from './select.js';
+import { itemsLabel } from './format.js';
 
 const $ = (s) => document.querySelector(s);
 const state = { photos: [], byId: new Map(), view: 'all', viewerFromApp: false, viewerList: null, mapActive: false, libraryScroll: 0 };
@@ -90,10 +91,10 @@ function prepare(data, hidden = new Set()) {
   return data.items.filter((it) => !hidden.has(it.id)).map((it, index) => ({
     ...it,
     index,
-    src: url(it.path),
+    src: it.url || url(it.path), // videos in the release have their own URL
     liveSrc: it.live ? url(it.live) : null,
     thumb: `m/${it.id}.webp`,
-    name: it.path.split('/').pop(),
+    name: it.path.split('/').pop().replace(/\.release$/, ''),
     day: it.taken ? it.taken.slice(0, 10) : 'unknown',
     month: it.taken ? it.taken.slice(0, 7) : 'unknown',
     year: it.taken ? it.taken.slice(0, 4) : 'unknown',
@@ -145,9 +146,10 @@ function shortcutReturned({ shortcut, arg }) {
   try { view = sessionStorage.getItem('photos.returnView') || view; } catch {}
   if (shortcut === 'deleted' && selection) {
     const ids = new Set(arg.split(',').filter((id) => state.byId.has(id)));
+    const what = itemsLabel([...ids].map((id) => state.byId.get(id))).toLowerCase();
     rememberDeleted(ids);
     removePhotos(ids);
-    selection.toast(`Deleted ${ids.size} photo${ids.size === 1 ? '' : 's'}. The site updates in about 2 minutes.`);
+    selection.toast(`Deleted ${what}. The site updates in about 2 minutes.`);
   } else if (shortcut === 'delete-failed' && selection) {
     const reason = new URLSearchParams(arg.split('?')[1] || '').get('errorMessage');
     selection.toast(`The “Delete from GitHub” shortcut didn't finish${reason ? `: ${reason}` : '.'} Nothing was hidden.`);
@@ -236,7 +238,7 @@ function bindPrefetch() {
   const prefetch = (tile) => {
     if (selection?.active) return;
     const p = tile && state.byId.get(tile.dataset.id);
-    if (p) loadOriginal(p).catch(() => {});
+    if (p && !p.video) loadOriginal(p).catch(() => {}); // videos stream when played
   };
   let timer = 0;
   document.addEventListener('pointerover', (e) => {

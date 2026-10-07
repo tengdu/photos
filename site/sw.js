@@ -15,7 +15,8 @@ self.addEventListener('activate', (e) => e.waitUntil((async () => {
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET' || req.headers.has('range')) return; // videos stream with Range requests
+  // Videos stream with Range requests, straight from the network.
+  if (req.method !== 'GET' || req.headers.has('range') || req.destination === 'video' || req.destination === 'audio') return;
   const url = new URL(req.url);
   if (url.origin === self.location.origin && url.pathname.startsWith(scope)) {
     const path = url.pathname.slice(scope.length);

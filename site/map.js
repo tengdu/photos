@@ -1,7 +1,7 @@
 // Map view: photos clustered by location, drawn as thumbnail pins (like Places in Photos).
 import Supercluster from 'supercluster';
 import { loadMaplibre, mapStyle, onSchemeChange } from './maplib.js';
-import { count, placeLabel, rangeLabel } from './format.js';
+import { itemCount, placeLabel, rangeLabel } from './format.js';
 import { tileHTML } from './library.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -17,7 +17,7 @@ export function showMap(options) {
   root = options.root;
   root.hidden = false;
   geo = opts.photos.filter((p) => p.geo);
-  opts.setHeader('Map', geo.length ? `${count(geo.length, 'Photo')} with a location` : 'No photos with a location yet');
+  opts.setHeader('Map', geo.length ? `${itemCount(geo)} with a location` : 'No photos with a location yet');
   ready ??= init().catch((e) => {
     ready = null;
     root.innerHTML = `<p class="empty map-empty">Couldn't load the map.<br><span>${esc(e.message)}</span></p>`;
@@ -118,7 +118,7 @@ function renderPins() {
     const pin = document.createElement('button');
     pin.type = 'button';
     pin.className = 'pin';
-    pin.setAttribute('aria-label', cluster ? `${n} photos` : `Photo, ${placeLabel(cover.place)}`);
+    pin.setAttribute('aria-label', cluster ? `${n} items` : `${cover.video ? 'Video' : 'Photo'}, ${placeLabel(cover.place)}`);
     pin.innerHTML = `<img src="${cover.thumb}" alt="" decoding="async">${cluster ? `<span>${n > 999 ? `${Math.floor(n / 1000)}k` : n}</span>` : ''}`;
     el.append(pin);
     pin.addEventListener('click', (e) => {
@@ -145,7 +145,7 @@ function openSheet(photos, clusterId, center) {
   sheetList = photos;
   const places = [...new Set(photos.map((p) => p.place?.city).filter(Boolean))].slice(0, 3).join(' · ');
   const range = rangeLabel(photos[0].taken, photos[photos.length - 1].taken);
-  sheet.innerHTML = `<header class="sheet-h"><div><strong>${esc(places || 'Photos')}</strong><span>${esc([count(photos.length, 'Photo'), range].filter(Boolean).join(' · '))}</span></div>`
+  sheet.innerHTML = `<header class="sheet-h"><div><strong>${esc(places || 'Photos')}</strong><span>${esc([itemCount(photos), range].filter(Boolean).join(' · '))}</span></div>`
     + '<button type="button" class="sheet-btn" data-act="zoom">Zoom In</button><button type="button" class="sheet-btn sheet-x" data-act="close" aria-label="Close">×</button></header>'
     + `<div class="grid grid-sheet">${photos.map((p) => tileHTML(p, true)).join('')}</div>`;
   sheet.querySelectorAll('img').forEach((img) => {

@@ -115,6 +115,13 @@ html[data-selecting] .top-btn { background: var(--accent); color: #fff; }
   filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.55));
 }
 .t-live svg { width: 100%; height: 100%; display: block; }
+.t-dur {
+  position: absolute; right: 6px; bottom: 4px;
+  color: #fff; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.6), 0 1px 2px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+html[data-selecting] .t-dur { display: none; } /* the check mark takes this corner */
 
 .sec { content-visibility: auto; contain-intrinsic-size: auto 480px; }
 .sec-h { padding: 22px 16px 8px; }
@@ -263,7 +270,8 @@ html[data-selecting] .top-btn { background: var(--accent); color: #fff; }
 
 /* ---------- Viewer (PhotoSwipe) ---------- */
 .pswp { --pswp-bg: #000; --pswp-placeholder-bg: #000; --panel-bg: #1c1c1e; font-family: var(--font); }
-.pswp__img.orig { position: absolute; }
+.pswp__img.orig, .orig-clip { position: absolute; top: 0; left: 0; }
+.orig-video { background: transparent; }
 .orig-media { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .live-video { opacity: 0; transition: opacity 0.25s ease; pointer-events: none; }
 .live-video.playing { opacity: 1; }

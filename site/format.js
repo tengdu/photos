@@ -50,6 +50,36 @@ export function fileSize(bytes) {
 export const megapixels = (w, h) => `${Math.round((w * h) / 1e6)} MP`;
 export const count = (n, word) => `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
 
+/** "1,234 Photos, 56 Videos" (a part that would be 0 is left out). */
+export function itemCount(items) {
+  const videos = items.filter((p) => p.video).length;
+  const photos = items.length - videos;
+  return [(photos || !videos) && count(photos, 'Photo'), videos && count(videos, 'Video')].filter(Boolean).join(', ');
+}
+
+/** Like Photos: "2 Photos", "1 Video", or "3 Items" for a mix. */
+export function itemsLabel(items) {
+  const videos = items.filter((p) => p.video).length;
+  if (!videos) return count(items.length, 'Photo');
+  return count(items.length, videos === items.length ? 'Video' : 'Item');
+}
+
+/** Video length: "0:07", "12:45", "1:02:03". */
+export function duration(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  const hms = [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60];
+  return hms[0] ? `${hms[0]}:${String(hms[1]).padStart(2, '0')}:${String(hms[2]).padStart(2, '0')}` : `${hms[1]}:${String(hms[2]).padStart(2, '0')}`;
+}
+
+/** "4K", "1080p", "720p" by the shorter side; otherwise the size. */
+export function resolution(w, h) {
+  const short = Math.min(w, h);
+  const long = Math.max(w, h);
+  if (long >= 3800 && short >= 2100) return '4K';
+  for (const p of [1080, 720, 480]) if (Math.abs(short - p) <= 8 && long >= p * 1.7) return `${p}p`;
+  return `${w} × ${h}`;
+}
+
 export function exposure(sec) {
   if (!sec) return '';
   if (sec >= 1) return `${+sec.toFixed(1)} s`;

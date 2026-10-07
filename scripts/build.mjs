@@ -1,8 +1,12 @@
-// Builds the gallery in _site/ from the originals in photos/.
-// Each photo gets exactly ONE generated image: a 720px WebP preview, used everywhere except the
-// viewer. The viewer always shows the original file, loaded from raw.githubusercontent.com.
+// Builds the gallery in _site/ from the originals in photos/ (and videos in the "media" release).
+// Each photo or video gets exactly ONE generated image: a 720px WebP preview, used everywhere except
+// the viewer. The viewer always shows the original file, loaded from raw.githubusercontent.com
+// (or, for videos, from the release).
 import { readdir, mkdir, mkdtemp, copyFile, writeFile, readFile, access, rm, stat } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { createWriteStream } from 'node:fs';
+import { execFileSync, execSync } from 'node:child_process';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +16,7 @@ import * as esbuild from 'esbuild';
 import { rgbaToThumbHash } from 'thumbhash';
 import { parseHeif, itemProps, primarySize, exifTiff } from '../site/lib/heif.js';
 import { placeFor } from './places.mjs';
+import { readVideo, videoFrame } from './video.mjs';
 
 const SRC = 'photos';
 const CACHE = '.cache/v2';
@@ -21,10 +26,19 @@ const REPO = process.env.GITHUB_REPOSITORY || process.env.PHOTOS_REPO || 'tengdu
 const BRANCH = process.env.GITHUB_REF_NAME || 'main';
 // Where the browser loads originals from (overridable for local testing).
 const RAW_BASE = process.env.RAW_BASE || `https://raw.githubusercontent.com/${REPO}/${BRANCH}/`;
+// Videos are uploaded to this release (the repo only takes files up to ~25–50 MB through the API);
+// for each one, photos/ holds a small placeholder named "<video file name>.release".
+const RELEASE_TAG = process.env.RELEASE_TAG || 'media';
+const PLACEHOLDER = '.release';
+const API = `https://api.github.com/repos/${REPO}`;
+const apiHeaders = {
+  Accept: 'application/vnd.github+json',
+  ...(process.env.GITHUB_TOKEN && { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }),
+};
 
 const STILL = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif']);
 const HEIF = new Set(['.heic', '.heif']);
-const MOTION = new Set(['.mov', '.mp4']);
+const VIDEO = new Set(['.mov', '.mp4', '.m4v']); // a video, or the motion of a Live Photo
 const EXIF_PICK = [
   'Make', 'Model', 'LensModel', 'FNumber', 'ExposureTime', 'ISO', 'FocalLength', 'FocalLengthIn35mmFormat',
   'DateTimeOriginal', 'OffsetTimeOriginal', 'CreateDate', 'OffsetTime',
@@ -111,17 +125,78 @@ function metersBetween([lat1, lon1], [lat2, lon2]) {
   return 2 * 6371000 * Math.asin(Math.sqrt(a));
 }
 
+// ---------- Videos in the release ----------
+async function releaseFiles() {
+  const res = await fetch(`${API}/releases/tags/${RELEASE_TAG}`, { headers: apiHeaders });
+  if (res.status === 404) return []; // no release yet: no videos uploaded
+  if (!res.ok) throw new Error(`GitHub API: HTTP ${res.status} for the "${RELEASE_TAG}" release`);
+  const { id } = await res.json();
+  const assets = [];
+  for (let page = 1; ; page++) {
+    const r = await fetch(`${API}/releases/${id}/assets?per_page=100&page=${page}`, { headers: apiHeaders });
+    if (!r.ok) throw new Error(`GitHub API: HTTP ${r.status} listing the "${RELEASE_TAG}" release`);
+    const batch = await r.json();
+    assets.push(...batch);
+    if (batch.length < 100) return assets;
+  }
+}
+
+async function download(asset, dir) {
+  const file = path.join(dir, `${asset.id}${path.extname(asset.name)}`);
+  const res = await fetch(asset.browser_download_url);
+  if (!res.ok || !res.body) throw new Error(`download failed: HTTP ${res.status}`);
+  await pipeline(Readable.fromWeb(res.body), createWriteStream(file));
+  if ((await stat(file)).size !== asset.size) throw new Error('download incomplete');
+  return file;
+}
+
+// Release files without a placeholder: the video was deleted on the site (or its upload never
+// finished). Only CI deletes them, and a file that never was on the site gets an hour to get its
+// placeholder, as the shortcut uploads the video first.
+async function cleanRelease(assets, wanted) {
+  const listFile = path.join(CACHE, 'release.json');
+  const shown = new Set((await exists(listFile)) ? JSON.parse(await readFile(listFile, 'utf8')) : []);
+  const keep = [];
+  for (const a of assets) {
+    if (wanted.has(a.name)) { keep.push(a.id); continue; }
+    if (!shown.has(a.id) && Date.now() - Date.parse(a.created_at) < 3600e3) continue;
+    if (process.env.GITHUB_ACTIONS !== 'true') {
+      console.log(`release: ${a.name} has no placeholder; the CI build will delete it`);
+      continue;
+    }
+    const res = await fetch(`${API}/releases/assets/${a.id}`, { method: 'DELETE', headers: apiHeaders });
+    console.log(res.ok ? `release: deleted ${a.name} (its placeholder is gone)` : `release: couldn't delete ${a.name}: HTTP ${res.status}`);
+  }
+  await writeFile(listFile, JSON.stringify(keep));
+}
+
 // ---------- Collect originals ----------
-async function collect(hashes) {
-  const files = (await readdir(SRC, { recursive: true, withFileTypes: true }))
+async function listFiles() {
+  return (await readdir(SRC, { recursive: true, withFileTypes: true }))
     .filter((d) => d.isFile())
     .map((d) => path.relative('.', path.join(d.parentPath, d.name)).split(path.sep).join('/'))
     .sort();
+}
+
+// Items: photos { still, motion?, ext }, videos in the repo { video, file, ext },
+// videos in the release { video (the placeholder), asset, ext }.
+async function collect(files, hashes, assets) {
+  const uploaded = new Map(assets.filter((a) => a.state === 'uploaded').map((a) => [a.name, a]));
+  const entries = [];
   // A still and a .mov with the same name are a Live Photo.
   const byStem = new Map();
   for (const rel of files) {
+    if (rel.endsWith(PLACEHOLDER)) {
+      const name = path.basename(rel, PLACEHOLDER);
+      const asset = uploaded.get(name);
+      if (!asset) { console.log(`skip ${rel}: "${name}" isn't in the "${RELEASE_TAG}" release`); continue; }
+      // Its SHA-256 (from GitHub) identifies the content without downloading it.
+      const digest = /^sha256:([0-9a-f]{16})/.exec(asset.digest || '')?.[1];
+      entries.push({ video: rel, asset, ext: path.extname(name).toLowerCase(), id: digest || sha1(`asset:${asset.id}`).slice(0, 16) });
+      continue;
+    }
     const ext = path.extname(rel).toLowerCase();
-    const kind = STILL.has(ext) ? 'still' : MOTION.has(ext) ? 'motion' : null;
+    const kind = STILL.has(ext) ? 'still' : VIDEO.has(ext) ? 'motion' : null;
     if (!kind) continue;
     const stem = rel.slice(0, -ext.length).toLowerCase();
     const e = byStem.get(stem) || {};
@@ -129,19 +204,25 @@ async function collect(hashes) {
     if (kind === 'still') e.ext = ext;
     byStem.set(stem, e);
   }
+  for (const e of byStem.values()) {
+    entries.push(e.still ? e : { video: e.motion, file: e.motion, ext: path.extname(e.motion).toLowerCase() }); // a video on its own
+  }
   // Identical files (the same photo uploaded twice) are shown once; prefer the copy with motion.
   const byId = new Map();
   const seen = new Set();
-  for (const e of byStem.values()) {
-    if (!e.still) { console.log(`skip ${e.motion}: videos aren't supported yet`); continue; }
-    const { size } = await stat(e.still);
-    const key = `${e.still}|${size}`;
-    seen.add(key);
-    e.id = hashes[key] ??= sha1(await readFile(e.still)).slice(0, 16);
+  const label = (e) => e.still || e.video;
+  for (const e of entries) {
+    if (!e.id) {
+      const file = e.still || e.file;
+      const { size } = await stat(file);
+      const key = `${file}|${size}`;
+      seen.add(key);
+      e.id = hashes[key] ??= sha1(await readFile(file)).slice(0, 16);
+    }
     const prev = byId.get(e.id);
     if (prev) {
       const keep = !prev.motion && e.motion ? e : prev;
-      console.log(`duplicate: ${(keep === e ? prev : e).still} is the same file as ${keep.still}`);
+      console.log(`duplicate: ${label(keep === e ? prev : e)} is the same file as ${label(keep)}`);
       byId.set(e.id, keep);
     } else {
       byId.set(e.id, e);
@@ -165,12 +246,69 @@ async function pruneCache(ids) {
   if (removed) console.log(`cache: removed ${removed} files of deleted photos`);
 }
 
-// ---------- Per-photo processing (cached by content hash) ----------
+// ---------- Per-item processing (cached by content hash) ----------
 async function processItem(item, tmpDir) {
   const metaFile = path.join(CACHE, `${item.id}.json`);
   const webp = path.join(CACHE, `${item.id}.webp`);
   if (await exists(metaFile) && await exists(webp)) return JSON.parse(await readFile(metaFile, 'utf8'));
+  const meta = item.still ? await processPhoto(item, tmpDir, webp) : await processVideo(item, tmpDir, webp);
+  await writeFile(metaFile, JSON.stringify(meta));
+  return meta;
+}
 
+// The one generated image (720px WebP) and the ThumbHash placeholder, from an upright image.
+async function preview(img, webp) {
+  const out = await img.clone()
+    .resize(PREVIEW, PREVIEW, { fit: 'inside', withoutEnlargement: true })
+    .webp({ quality: 70, effort: 5 })
+    .toFile(webp);
+  const { data, info } = await img.clone()
+    .resize(100, 100, { fit: 'inside' })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return { width: out.width, height: out.height, th: Buffer.from(rgbaToThumbHash(info.width, info.height, data)).toString('base64') };
+}
+
+// ffmpeg is only needed for new videos, so CI installs it the first time one comes along.
+let ffmpegChecked = false;
+function ensureFfmpeg() {
+  if (ffmpegChecked) return;
+  ffmpegChecked = true;
+  try {
+    run(process.env.FFMPEG || 'ffmpeg', ['-version']);
+    return;
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  if (!process.env.FFMPEG_INSTALL) throw new Error('ffmpeg not found (needed for video previews)');
+  console.log('installing ffmpeg for video previews…');
+  execSync(process.env.FFMPEG_INSTALL, { stdio: 'inherit' });
+}
+
+async function processVideo(item, tmpDir, webp) {
+  const file = item.file || (await download(item.asset, tmpDir));
+  try {
+    const info = await readVideo(file);
+    ensureFfmpeg();
+    const { th } = await preview(sharp(videoFrame(file, info.color)), webp);
+    return {
+      taken: info.taken || takenAt({}, item.video),
+      w: info.w,
+      h: info.h,
+      th,
+      fmt: item.ext.slice(1),
+      size: item.asset?.size ?? (await stat(file)).size,
+      video: info.video,
+      geo: info.geo && [round(info.geo[0], 5), round(info.geo[1], 5)],
+      cam: info.cam,
+    };
+  } finally {
+    if (!item.file) await rm(file, { force: true });
+  }
+}
+
+async function processPhoto(item, tmpDir, webp) {
   const buf = await readFile(item.still);
   let exif, w, h, input, rotate;
   if (HEIF.has(item.ext)) {
@@ -195,32 +333,22 @@ async function processItem(item, tmpDir) {
   let img = sharp(input, { failOn: 'none' });
   if (rotate === 'exif') img = img.rotate();
   else if (rotate) img = img.rotate(rotate);
-  const out = await img.clone()
-    .resize(PREVIEW, PREVIEW, { fit: 'inside', withoutEnlargement: true })
-    .webp({ quality: 70, effort: 5 })
-    .toFile(webp);
+  const out = await preview(img, webp);
   if (w !== h && out.width !== out.height && (w > h) !== (out.width > out.height)) {
     console.warn(`warning: preview orientation differs from the original for ${item.still}`);
   }
-  const { data, info } = await img.clone()
-    .resize(100, 100, { fit: 'inside' })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
 
   const lat = exif.latitude, lon = exif.longitude;
   const geo = Number.isFinite(lat) && Number.isFinite(lon) && (lat || lon) ? [round(lat, 5), round(lon, 5)] : null;
-  const meta = {
+  return {
     taken: takenAt(exif, item.still),
     w, h,
-    th: Buffer.from(rgbaToThumbHash(info.width, info.height, data)).toString('base64'),
+    th: out.th,
     fmt: item.ext === '.jpeg' ? 'jpg' : item.ext.slice(1),
     size: buf.length,
     geo,
     cam: camera(exif),
   };
-  await writeFile(metaFile, JSON.stringify(meta));
-  return meta;
 }
 
 // ---------- Front-end bundle ----------
@@ -314,9 +442,19 @@ async function main() {
   const hashes = (await exists(hashFile)) ? JSON.parse(await readFile(hashFile, 'utf8')) : {};
   const zones = privacyZones();
 
+  const files = await listFiles();
+  const placeholders = files.filter((f) => f.endsWith(PLACEHOLDER));
+  let assets = null;
+  try {
+    assets = await releaseFiles();
+  } catch (e) {
+    if (placeholders.length) throw e; // keep the current site rather than deploy it without its videos
+    console.warn(`release: ${e.message}`);
+  }
+
   const items = [];
   let fresh = 0;
-  const collected = await collect(hashes);
+  const collected = await collect(files, hashes, assets || []);
   await pruneCache(new Set(collected.map((c) => c.id)));
   for (const item of collected) {
     try {
@@ -328,33 +466,37 @@ async function main() {
       const place = meta.geo ? placeFor(meta.geo[0], meta.geo[1]) : null; // not cached: cheap, and rules may change
       items.push({
         id: item.id,
-        path: item.still,
+        path: item.still || item.video,
+        ...(item.asset && { url: item.asset.browser_download_url }),
         taken: meta.taken,
         w: meta.w,
         h: meta.h,
         th: meta.th,
         fmt: meta.fmt,
         size: meta.size,
+        ...(meta.video && { video: meta.video }),
         ...(item.motion && { live: item.motion }),
         ...(meta.geo && !hidden && { geo: meta.geo }),
         ...(place && { place }),
         ...(meta.cam && { cam: meta.cam }),
       });
     } catch (e) {
-      console.warn(`skip ${item.still}: ${e.stderr?.toString().trim() || e.message}`);
+      console.warn(`skip ${item.still || item.video}: ${e.stderr?.toString().trim() || e.message}`);
     }
   }
   await rm(tmpDir, { recursive: true, force: true });
   await writeFile(hashFile, JSON.stringify(hashes));
+  if (assets) await cleanRelease(assets, new Set(placeholders.map((f) => path.basename(f, PLACEHOLDER))));
 
   items.sort((a, b) => instant(b.taken) - instant(a.taken) || (a.path < b.path ? 1 : -1));
   const json = JSON.stringify({ raw: RAW_BASE, items });
   await writeFile(path.join(OUT, 'photos.json'), json);
   await bundle(sha1(json).slice(0, 10));
 
+  const videos = items.filter((i) => i.video).length;
   const live = items.filter((i) => i.live).length;
   const mapped = items.filter((i) => i.geo).length;
-  console.log(`built ${items.length} photos (${fresh} new, ${live} live, ${mapped} on the map) → ${OUT}/`);
+  console.log(`built ${items.length - videos} photos and ${videos} videos (${fresh} new, ${live} live, ${mapped} on the map) → ${OUT}/`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

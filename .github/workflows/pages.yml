@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # read photos/; delete files of deleted videos from the "media" release
   pages: write
   id-token: write
 
@@ -64,6 +64,10 @@ jobs:
         env:
           # "lat,lon,radius_m; …" — photos within these areas are left off the map.
           PRIVACY_ZONES: ${{ secrets.PRIVACY_ZONES }}
+          # Lists the videos in the "media" release.
+          GITHUB_TOKEN: ${{ github.token }}
+          # ffmpeg makes the preview of a new video; installed only when one needs it.
+          FFMPEG_INSTALL: sudo apt-get install -y -q --no-install-recommends ffmpeg
 
       - uses: actions/upload-pages-artifact@v3
         with:
