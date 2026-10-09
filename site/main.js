@@ -4,9 +4,13 @@ import { openViewer, closeViewer, isOpen } from './viewer.js';
 import { loadOriginal } from './original.js';
 import { createSelection, recentlyDeleted, rememberDeleted } from './select.js';
 import { itemsLabel } from './format.js';
+import { buildAlbums, rememberAlbumEdit, albumHash } from './albums.js';
 
 const $ = (s) => document.querySelector(s);
-const state = { photos: [], byId: new Map(), view: 'all', viewerFromApp: false, viewerList: null, mapActive: false, libraryScroll: 0 };
+const state = {
+  photos: [], byId: new Map(), view: 'all', viewerFromApp: false, viewerList: null, mapActive: false, libraryScroll: 0,
+  rawAlbums: [], albums: [], album: null, // album: the open album's name
+};
 let library;
 let selection = null; // owner only
 let mapModule;
@@ -45,6 +49,8 @@ async function boot() {
     return;
   }
   state.photos.forEach((p) => state.byId.set(p.id, p));
+  state.rawAlbums = data.albums || [];
+  state.albums = buildAlbums(state.rawAlbums, state.byId);
   library = new Library({
     root: $('#view'),
     title: $('#title'),
@@ -52,8 +58,11 @@ async function boot() {
     dock: $('#dock'),
     zoom: $('#zoom'),
     photos: state.photos,
+    albums: state.albums,
   });
-  if (owner) selection = createSelection({ button: $('#select'), root: $('#view'), getPhotos: () => state.photos });
+  if (owner) {
+    selection = createSelection({ button: $('#select'), root: $('#view'), getPhotos: () => state.photos, getAlbums: () => state.albums });
+  }
   document.addEventListener('click', onClick);
   bindPrefetch();
   addEventListener('hashchange', route);
@@ -88,24 +97,35 @@ async function loadPhotoList() {
 
 function prepare(data, hidden = new Set()) {
   const url = (path) => data.raw + path.split('/').map(encodeURIComponent).join('/');
-  return data.items.filter((it) => !hidden.has(it.id)).map((it, index) => ({
-    ...it,
-    index,
-    src: it.url || url(it.path), // videos in the release have their own URL
-    liveSrc: it.live ? url(it.live) : null,
-    thumb: `m/${it.id}.webp`,
-    name: it.path.split('/').pop().replace(/\.release$/, ''),
-    day: it.taken ? it.taken.slice(0, 10) : 'unknown',
-    month: it.taken ? it.taken.slice(0, 7) : 'unknown',
-    year: it.taken ? it.taken.slice(0, 4) : 'unknown',
-  }));
+  return data.items.filter((it) => !hidden.has(it.id)).map((it, index) => {
+    const name = it.path.split('/').pop().replace(/\.release$/, '');
+    return {
+      ...it,
+      index,
+      src: it.url || url(it.path), // videos in the release have their own URL
+      liveSrc: it.live ? url(it.live) : null,
+      thumb: `m/${it.id}.webp`,
+      name,
+      stem: name.replace(/\.[^.]+$/, ''), // how albums refer to it
+      day: it.taken ? it.taken.slice(0, 10) : 'unknown',
+      month: it.taken ? it.taken.slice(0, 7) : 'unknown',
+      year: it.taken ? it.taken.slice(0, 4) : 'unknown',
+    };
+  });
 }
+
+const SHORTCUT_RETURNS = ['deleted', 'delete-failed', 'album-added', 'album-removed', 'album-failed'];
+const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+const viewHash = () => (state.view === 'album' ? albumHash(state.album) : `#/${state.view}`);
+const openAlbum = () => state.albums.find((a) => a.name === state.album);
 
 function parseRoute() {
   const [, kind, arg] = /^#\/([a-z-]+)(?:\/(.+))?$/.exec(location.hash) || [];
   if (kind === 'photo') return { photo: arg };
-  if (kind === 'deleted' || kind === 'delete-failed') return { shortcut: kind, arg: arg || '' };
+  if (SHORTCUT_RETURNS.includes(kind)) return { shortcut: kind, arg: arg || '' };
   if (kind === 'map') return { view: 'map', focus: arg };
+  if (kind === 'albums') return { view: 'albums' };
+  if (kind === 'album' && arg) return { view: 'album', album: decode(arg) };
   if (VIEWS.includes(kind)) return { view: kind, anchor: arg };
   return { view: state.view };
 }
@@ -115,8 +135,8 @@ function route() {
   if (r.shortcut) return shortcutReturned(r);
   if (r.photo) {
     const p = state.byId.get(r.photo);
-    if (!p) return location.replace(`#/${state.view}`);
-    if (!state.mapActive && !library.view) library.show(state.view === 'map' ? 'all' : state.view);
+    if (!p) return location.replace(viewHash());
+    if (!state.mapActive && !library.view) library.show(state.view === 'map' ? 'all' : state.view, state.album);
     const list = state.viewerList?.includes(p) ? state.viewerList : state.photos;
     openViewer({
       photos: list,
@@ -131,30 +151,50 @@ function route() {
     return;
   }
   if (isOpen()) closeViewer(); // e.g. the browser's Back button while the viewer is open
+  if (r.view === 'album' && !state.albums.some((a) => a.name === r.album)) return location.replace('#/albums');
   state.view = r.view;
+  state.album = r.view === 'album' ? r.album : null;
   setDock(r.view);
-  selection?.setAvailable(r.view === 'all' || r.view === 'days');
+  $('#back').hidden = r.view !== 'album';
+  selection?.setAvailable(['all', 'days', 'album'].includes(r.view), state.album);
   if (r.view === 'map') return showMapView(r.focus);
   if (state.mapActive) hideMapView();
-  library.show(r.view, r.anchor);
+  library.show(r.view, r.view === 'album' ? r.album : r.anchor);
   selection?.refresh();
 }
 
-// Back from the "Delete from GitHub" shortcut (see select.js).
+// Back from the "Delete from GitHub" or "Add to Album" shortcut (see select.js).
 function shortcutReturned({ shortcut, arg }) {
   let view = 'all';
   try { view = sessionStorage.getItem('photos.returnView') || view; } catch {}
+  const [path, query = ''] = arg.split('?');
+  const listed = (ids) => ids.split(',').filter((id) => state.byId.has(id));
+  const what = (ids) => itemsLabel(ids.map((id) => state.byId.get(id))).toLowerCase();
   if (shortcut === 'deleted' && selection) {
-    const ids = new Set(arg.split(',').filter((id) => state.byId.has(id)));
-    const what = itemsLabel([...ids].map((id) => state.byId.get(id))).toLowerCase();
+    const ids = listed(path);
+    const label = what(ids);
     rememberDeleted(ids);
-    removePhotos(ids);
-    selection.toast(`Deleted ${what}. The site updates in about a minute.`);
-  } else if (shortcut === 'delete-failed' && selection) {
-    const reason = new URLSearchParams(arg.split('?')[1] || '').get('errorMessage');
-    selection.toast(`The “Delete from GitHub” shortcut didn't finish${reason ? `: ${reason}` : '.'} Nothing was hidden.`);
+    removePhotos(new Set(ids));
+    selection.toast(`Deleted ${label}. The site updates in about a minute.`);
+  } else if ((shortcut === 'album-added' || shortcut === 'album-removed') && selection) {
+    const cut = path.lastIndexOf('/');
+    const name = decode(path.slice(0, cut));
+    const ids = listed(path.slice(cut + 1));
+    const added = shortcut === 'album-added';
+    rememberAlbumEdit(added ? 'add' : 'remove', name, ids);
+    refreshAlbums();
+    selection.toast(added ? `Added ${what(ids)} to “${name}”.` : `Removed ${what(ids)} from “${name}”.`);
+  } else if (shortcut.endsWith('-failed') && selection) {
+    const reason = new URLSearchParams(query).get('errorMessage');
+    const name = shortcut === 'album-failed' ? 'Add to Album' : 'Delete from GitHub';
+    selection.toast(`The “${name}” shortcut didn't finish${reason ? `: ${reason}` : '.'}`);
   }
   location.replace(`#/${view}`);
+}
+
+function refreshAlbums() {
+  state.albums = buildAlbums(state.rawAlbums, state.byId);
+  library.setAlbums(state.albums);
 }
 
 // After deleting: drop the photos everywhere and redraw.
@@ -162,11 +202,13 @@ function removePhotos(ids) {
   state.photos = state.photos.filter((p) => !ids.has(p.id)).map((p, index) => ({ ...p, index }));
   state.byId = new Map(state.photos.map((p) => [p.id, p]));
   library.setPhotos(state.photos);
+  refreshAlbums();
   mapModule?.resetMap();
 }
 
 function setDock(view) {
-  for (const a of $('#dock').querySelectorAll('a[data-view]')) a.toggleAttribute('aria-current', a.dataset.view === view);
+  const current = view === 'album' ? 'albums' : view;
+  for (const a of $('#dock').querySelectorAll('a[data-view]')) a.toggleAttribute('aria-current', a.dataset.view === current);
 }
 
 async function showMapView(focusId) {
@@ -211,7 +253,7 @@ function onClosed(id) {
   // (another photo may already have been requested).
   if (location.hash !== `#/photo/${id}`) return;
   if (state.viewerFromApp) history.back();
-  else history.replaceState(null, '', `#/${state.view}`);
+  else history.replaceState(null, '', viewHash());
   state.viewerFromApp = false;
 }
 
@@ -221,6 +263,8 @@ function onClick(e) {
   if (!tile) return;
   e.preventDefault();
   if (selection?.active && tile.closest('#view')) return selection.toggle(tile.dataset.id);
+  // In an album, the viewer browses that album.
+  if (state.view === 'album' && tile.closest('#view')) state.viewerList = openAlbum()?.items || null;
   const hash = `#/photo/${tile.dataset.id}`;
   // If a photo is still in the URL (viewer closing), replace it instead of stacking history.
   if (location.hash.startsWith('#/photo/')) location.replace(hash);

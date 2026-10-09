@@ -172,6 +172,26 @@ html[data-selecting] .t-dur { display: none; } /* the check mark takes this corn
 .cards-years .card { aspect-ratio: 4 / 3; }
 .cards-years .card-text strong { font-size: 30px; }
 
+.albums {
+  display: grid;
+  gap: 18px 14px;
+  padding: 14px 16px 8px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+}
+@media (max-width: 599px) { .albums { grid-template-columns: repeat(2, 1fr); gap: 16px 12px; } }
+.album { display: flex; flex-direction: column; min-width: 0; }
+.album-cover {
+  display: block; aspect-ratio: 1;
+  border-radius: 10px; overflow: hidden;
+  background: var(--tile) center / cover no-repeat;
+}
+.album-cover img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 0.25s ease; }
+.album-cover img.loaded { opacity: 1; }
+.album strong { margin-top: 7px; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.album > span:last-child { font-size: 14px; color: var(--fg-2); }
+.top-back { display: inline-flex; align-items: center; gap: 1px; margin: 0 0 2px -5px; color: var(--accent); font-size: 16px; }
+.top-back[hidden] { display: none; }
+
 .empty { padding: 80px 24px; text-align: center; font-size: 19px; font-weight: 600; }
 .empty span { display: block; margin-top: 8px; font-size: 15px; font-weight: 400; color: var(--fg-2); }
 
@@ -187,7 +207,7 @@ html[data-selecting] .t-dur { display: none; } /* the check mark takes this corn
   gap: 8px;
   max-width: calc(100vw - 24px);
 }
-.seg, .dock-map {
+.seg, .dock-icon {
   background: var(--chrome);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   backdrop-filter: saturate(180%) blur(20px);
@@ -204,13 +224,13 @@ html[data-selecting] .t-dur { display: none; } /* the check mark takes this corn
   transition: background 0.2s ease;
 }
 .seg a[aria-current] { background: var(--pill-on); color: var(--pill-on-fg); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12); }
-.dock-map {
+.dock-icon {
   display: grid; place-items: center;
   width: 42px; height: 42px; flex: none;
   border-radius: 50%;
   color: var(--fg);
 }
-.dock-map[aria-current] { background: var(--accent); color: #fff; }
+.dock-icon[aria-current] { background: var(--accent); color: #fff; }
 @media (max-width: 420px) { .seg a { padding: 7px 10px; font-size: 13px; } }
 @media (max-width: 360px) { .seg a { padding: 7px 8px; font-size: 12.5px; } }
 
@@ -424,6 +444,7 @@ html[data-selecting] .tile.selected::after {
   height: 34px; padding: 0 14px; border: 0; border-radius: 999px;
   background: var(--pill); font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap;
 }
+.sel-icon { width: 40px; padding: 0; justify-content: center; }
 .sel-delete { background: #ff3b30; color: #fff; }
 .sel-delete:disabled { opacity: 0.4; cursor: default; }
 .sheet-wrap {
@@ -449,6 +470,24 @@ html[data-selecting] .tile.selected::after {
 .sheet-actions { display: flex; gap: 10px; }
 .sheet-btn { flex: 1; height: 42px; border: 0; border-radius: 12px; background: var(--pill); font-size: 15px; font-weight: 600; cursor: pointer; }
 .sheet-danger { background: #ff3b30; color: #fff; }
+.sheet-primary { flex: none; padding: 0 18px; background: var(--accent); color: #fff; }
+.pick-new { display: flex; gap: 8px; margin: 4px 0 12px; }
+.pick-new input {
+  flex: 1; min-width: 0; height: 42px; padding: 0 12px;
+  border: 0; border-radius: 12px; background: var(--pill); color: var(--fg);
+  font: inherit; font-size: 16px; /* 16px: iOS doesn't zoom in */
+}
+.pick { display: flex; flex-direction: column; gap: 2px; margin: 0 -6px 12px; max-height: 42vh; overflow: auto; }
+.pick-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px; border: 0; border-radius: 10px;
+  background: none; text-align: left; cursor: pointer;
+}
+.pick-row:hover { background: var(--pill); }
+.pick-row img { width: 46px; height: 46px; border-radius: 7px; object-fit: cover; flex: none; background: var(--tile); }
+.pick-row span { display: flex; flex-direction: column; min-width: 0; }
+.pick-row b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick-row small { font-size: 13px; color: var(--fg-2); }
 .toast {
   position: fixed; z-index: 21;
   left: 50%; bottom: calc(76px + var(--safe-b)); transform: translateX(-50%);

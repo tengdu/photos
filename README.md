@@ -7,7 +7,7 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 - On every push, `.github/workflows/pages.yml` runs `scripts/build.mjs`. For each photo or video it generates **one** image, a 720px WebP preview, which is used in the grids and cards (for videos, ffmpeg decodes the first frame, tone-mapping HDR). It also reads the capture time, camera details and GPS, and looks up a place name offline. Then it bundles the site and deploys it to GitHub Pages.
 - The **viewer always shows the original file**, loaded from `raw.githubusercontent.com`. JPEGs, and HEIC in Safari, are displayed directly. Chrome and Edge decode the original HEIC with the hardware HEVC decoder (WebCodecs, ~0.1–0.5 s). Other browsers fall back to libheif (WASM). Live Photos play the original `.mov`: they play once when opened, and again when you press and hold the photo, hover over **LIVE**, or press Space.
 - **Videos** play the original file from the release, with the browser's own controls. They start when they come into view, with sound if the browser allows it before a tap (otherwise muted: tap the speaker button). iPhone videos (HEVC, also HDR) play in Safari, and in Chrome/Edge on Macs and on PCs with hardware HEVC; other browsers offer the download.
-- Views: **Years**, **Months**, **Days**, **All Photos** (pinch, Ctrl+scroll or −/+ to change the grid size) and a **Map** of photos by place. Press **I** in the viewer for photo info. Identical files are shown once.
+- Views: **Years**, **Months**, **Days**, **All Photos** (pinch, Ctrl+scroll or −/+ to change the grid size), **Albums** and a **Map** of photos by place. Press **I** in the viewer for photo info. Identical files are shown once.
 - On iPhone, Safari → Share → **Add to Home Screen** turns the site into an app. A service worker keeps previews, app files and recently viewed originals, so repeat visits open instantly and work offline.
 
 > The repo is public: anyone can download the originals, including the GPS location stored in them.
@@ -15,6 +15,21 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 ### Delete photos and videos
 
 Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on your iPhone, iPad or Mac; `?owner=off` turns it off again. Then, in All Photos or Days, tap **Select**, tap the photos and videos (or **Select All**), **Delete** → **Delete with Shortcut**. The site starts the **Delete from GitHub** shortcut below with the list of files (Live Photo videos and video placeholders included); it deletes them, and Shortcuts returns to the site, where they disappear at once. The site rebuilds once, about a minute after the last deletion; that build also deletes the videos whose placeholder is gone from the release. Deleted photos stay in the repository's Git history; deleted videos are gone for good.
+
+### Albums
+
+In All Photos, Days or an album, tap **Select**, pick photos, then the **Add to Album** button (next to Delete): pick an album, or type a new name and tap **Create**. The site starts the **Add to Album** shortcut below, and the photos show in the album at once. Inside an album, **Remove** takes photos out of it with the **Delete from GitHub** shortcut; they stay in the library. Deleting a photo also takes it out of its albums.
+
+An album is a folder in the repo, `albums/<album name>/`, with one tiny file per photo named after the photo's file (without its extension), so you can also create or edit albums on GitHub. Like everything here, albums are public.
+
+### Add to Album shortcut
+
+The quickest way: in the Shortcuts app, long-press **Delete from GitHub** → **Duplicate**, rename the copy **Add to Album**, then:
+
+1. Delete its first **Get Contents of URL** (Method GET) and the **Get Dictionary Value** after it.
+2. In the remaining **Get Contents of URL**: set Method to **PUT**, and in the JSON body set `message` (Text) = `Add to album` and replace the `sha` field with `content` (Text) = `MQ==`.
+
+So it reads: **Text** (token) → **Set Variable** `Token` → **Split Text** (*Shortcut Input*, New Lines) → **Repeat with Each** → **Get Contents of URL** (URL `https://api.github.com/repos/tengdu/photos/contents/`**Repeat Item**, Method **PUT**, the same headers, JSON `message` and `content`) → **End Repeat**. Like Delete from GitHub, it must receive **Text**.
 
 ### Delete from GitHub shortcut
 

@@ -19,6 +19,9 @@ import { placeFor } from './places.mjs';
 import { readVideo, videoFrame } from './video.mjs';
 
 const SRC = 'photos';
+// An album is a folder albums/<album name>/ with one empty file per photo, named after the photo's
+// file without its extension (e.g. "20261005-222129-IMG_0219").
+const ALBUMS = 'albums';
 const CACHE = '.cache/v2';
 const OUT = '_site';
 const PREVIEW = 720; // long side of the one generated image per photo
@@ -46,6 +49,8 @@ const EXIF_PICK = [
 ];
 
 const exists = (p) => access(p).then(() => true, () => false);
+// "photos/20261005-222129-IMG_0219.heic" → "20261005-222129-IMG_0219" (also for "….mov.release")
+const stemOf = (p) => path.basename(p).replace(/\.release$/, '').replace(/\.[^.]+$/, '');
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] });
 const sha1 = (data) => createHash('sha1').update(data).digest('hex');
 const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
@@ -210,6 +215,7 @@ async function collect(files, hashes, assets) {
   // Identical files (the same photo uploaded twice) are shown once; prefer the copy with motion.
   const byId = new Map();
   const seen = new Set();
+  const stemIds = new Map(); // every file's name → id, so albums can refer to either copy
   const label = (e) => e.still || e.video;
   for (const e of entries) {
     if (!e.id) {
@@ -219,6 +225,7 @@ async function collect(files, hashes, assets) {
       seen.add(key);
       e.id = hashes[key] ??= sha1(await readFile(file)).slice(0, 16);
     }
+    stemIds.set(stemOf(label(e)), e.id);
     const prev = byId.get(e.id);
     if (prev) {
       const keep = !prev.motion && e.motion ? e : prev;
@@ -229,7 +236,27 @@ async function collect(files, hashes, assets) {
     }
   }
   for (const key of Object.keys(hashes)) if (!seen.has(key)) delete hashes[key];
-  return [...byId.values()];
+  return { collected: [...byId.values()], stemIds };
+}
+
+// Albums, newest first; their photos in library order (newest first).
+async function readAlbums(stemIds, order) {
+  if (!(await exists(ALBUMS))) return [];
+  const albums = [];
+  for (const dir of await readdir(ALBUMS, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    const ids = new Set();
+    let gone = 0;
+    for (const f of await readdir(path.join(ALBUMS, dir.name), { withFileTypes: true })) {
+      if (!f.isFile() || f.name.startsWith('.')) continue;
+      const id = stemIds.get(f.name) ?? stemIds.get(stemOf(f.name));
+      if (id && order.has(id)) ids.add(id);
+      else gone++;
+    }
+    if (gone) console.log(`album "${dir.name}": ${gone} of its photos are no longer in the library`);
+    if (ids.size) albums.push({ name: dir.name, ids: [...ids].sort((a, b) => order.get(a) - order.get(b)) });
+  }
+  return albums.sort((a, b) => order.get(a.ids[0]) - order.get(b.ids[0]) || a.name.localeCompare(b.name));
 }
 
 // Remove cached previews/metadata of photos that are no longer in the repo,
@@ -454,7 +481,7 @@ async function main() {
 
   const items = [];
   let fresh = 0;
-  const collected = await collect(files, hashes, assets || []);
+  const { collected, stemIds } = await collect(files, hashes, assets || []);
   await pruneCache(new Set(collected.map((c) => c.id)));
   for (const item of collected) {
     try {
@@ -489,14 +516,15 @@ async function main() {
   if (assets) await cleanRelease(assets, new Set(placeholders.map((f) => path.basename(f, PLACEHOLDER))));
 
   items.sort((a, b) => instant(b.taken) - instant(a.taken) || (a.path < b.path ? 1 : -1));
-  const json = JSON.stringify({ raw: RAW_BASE, items });
+  const albums = await readAlbums(stemIds, new Map(items.map((it, i) => [it.id, i])));
+  const json = JSON.stringify({ raw: RAW_BASE, items, albums });
   await writeFile(path.join(OUT, 'photos.json'), json);
   await bundle(sha1(json).slice(0, 10));
 
   const videos = items.filter((i) => i.video).length;
   const live = items.filter((i) => i.live).length;
   const mapped = items.filter((i) => i.geo).length;
-  console.log(`built ${items.length - videos} photos and ${videos} videos (${fresh} new, ${live} live, ${mapped} on the map) → ${OUT}/`);
+  console.log(`built ${items.length - videos} photos and ${videos} videos (${fresh} new, ${live} live, ${mapped} on the map), ${albums.length} albums → ${OUT}/`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

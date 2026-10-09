@@ -1,9 +1,11 @@
 // Library views (Years / Months / Days / All Photos), rendered as plain HTML strings.
 import { thumbHashToDataURL } from 'thumbhash';
-import { dayLabel, monthLabel, monthName, placeLabel, itemCount, rangeLabel, duration } from './format.js';
+import { dayLabel, monthLabel, monthName, placeLabel, itemCount, rangeLabel, duration, count } from './format.js';
+import { albumHash } from './albums.js';
 
 export const VIEWS = ['years', 'months', 'days', 'all'];
-const TITLES = { years: 'Years', months: 'Months', days: 'Days', all: 'All Photos' };
+const TITLES = { years: 'Years', months: 'Months', days: 'Days', all: 'All Photos', albums: 'Albums' };
+const GRIDS = ['all', 'album']; // views whose grid size can change
 const DENSITY_KEY = 'photos.density';
 const EAGER = 18; // tiles on the first screen load with high priority
 
@@ -73,11 +75,23 @@ const RENDER = {
   years(photos) {
     return `<div class="cards cards-years">${groupBy(photos, 'year').map((y) => card(y.photos[0], `#/months/${y.key}`, label.year(y.key), places(y.photos, 3), y.photos.length)).join('')}</div>`;
   },
+  album(photos) {
+    return `<div class="grid grid-all">${photos.map(tile).join('')}</div>`;
+  },
+  albums(albums) {
+    if (!albums.length) {
+      const hint = document.documentElement.hasAttribute('data-owner') ? '<br><span>In All Photos or Days, tap Select, pick photos, then Add to Album.</span>' : '';
+      return `<p class="empty">No albums yet.${hint}</p>`;
+    }
+    return `<div class="albums">${albums.map((a) => `<a class="album" href="${albumHash(a.name)}">`
+      + `<span class="album-cover" data-th="${a.items[0].th || ''}"><img src="${a.items[0].thumb}" alt="" loading="lazy" decoding="async"></span>`
+      + `<strong>${esc(a.name)}</strong><span>${a.items.length.toLocaleString('en-US')}</span></a>`).join('')}</div>`;
+  },
 };
 
 export class Library {
-  constructor({ root, title, subtitle, dock, zoom, photos }) {
-    Object.assign(this, { root, title, subtitle, dock, zoom, photos, view: null });
+  constructor({ root, title, subtitle, dock, zoom, photos, albums }) {
+    Object.assign(this, { root, title, subtitle, dock, zoom, photos, albums, view: null, album: null, shown: null });
     try { this.density = Number(localStorage.getItem(DENSITY_KEY)) || 0; } catch { this.density = 0; }
     this.io = new IntersectionObserver((entries) => {
       for (const e of entries) {
@@ -101,29 +115,52 @@ export class Library {
     addEventListener('resize', () => { this.applyDensity(); onScroll(); });
   }
 
-  show(view, anchor) {
+  /** `arg`: the album's name in the album view, else a date to scroll to. */
+  show(view, arg) {
     document.documentElement.dataset.view = view;
-    if (view !== this.view) {
+    const key = view === 'album' ? `album/${arg}` : view;
+    if (key !== this.shown) {
       this.view = view;
+      this.album = view === 'album' ? arg : null;
+      this.shown = key;
       tileCount = 0;
-      this.root.innerHTML = this.photos.length ? RENDER[view](this.photos) : '<p class="empty">No photos yet.<br><span>Share photos from your iPhone with the “Upload to GitHub” shortcut.</span></p>';
+      this.root.innerHTML = this.render();
       this.root.querySelectorAll('[data-th]').forEach((el) => this.io.observe(el));
       this.root.querySelectorAll('img').forEach((img) => img.complete && img.naturalWidth && img.classList.add('loaded'));
       this.applyDensity();
       scrollTo(0, 0);
     }
-    this.zoom.hidden = view !== 'all';
-    if (anchor) this.scrollToKey(anchor);
+    this.zoom.hidden = !GRIDS.includes(view);
+    if (arg && view !== 'album') this.scrollToKey(arg);
     this.updateTitle();
+  }
+
+  render() {
+    if (this.view === 'albums') return RENDER.albums(this.albums);
+    if (this.view === 'album') return RENDER.album(this.albumPhotos());
+    return this.photos.length ? RENDER[this.view](this.photos) : '<p class="empty">No photos yet.<br><span>Share photos from your iPhone with the “Upload to GitHub” shortcut.</span></p>';
+  }
+
+  albumPhotos() {
+    return this.albums.find((a) => a.name === this.album)?.items || [];
+  }
+
+  /** Replace the albums (after adding or removing photos) and redraw an album view in place. */
+  setAlbums(albums) {
+    this.albums = albums;
+    if (this.view === 'albums' || this.view === 'album') this.redraw();
   }
 
   /** Replace the photo list (e.g. after deleting some) and redraw the current view in place. */
   setPhotos(photos) {
     this.photos = photos;
-    const { view } = this;
+    this.redraw();
+  }
+
+  redraw() {
     const y = scrollY;
-    this.view = null;
-    this.show(view);
+    this.shown = null;
+    this.show(this.view, this.album);
     scrollTo(0, y);
   }
 
@@ -152,7 +189,13 @@ export class Library {
     const el = document.elementFromPoint(x, y);
     let title = TITLES[this.view];
     let sub = '';
-    if (!this.photos.length) {
+    if (this.view === 'albums') {
+      sub = this.albums.length ? count(this.albums.length, 'Album') : '';
+    } else if (this.view === 'album') {
+      const photos = this.albumPhotos();
+      title = this.album;
+      sub = [itemCount(photos), photos.length && rangeLabel(photos[0].taken, photos[photos.length - 1].taken)].filter(Boolean).join(' · ');
+    } else if (!this.photos.length) {
       sub = '';
     } else if (this.view === 'all') {
       const t = el?.closest('.tile') || this.root.querySelector('.tile');
@@ -191,7 +234,7 @@ export class Library {
 
   // Pinch (touch), trackpad pinch / Ctrl+scroll (desktop) change the All Photos grid density.
   bindPinch() {
-    const active = () => this.view === 'all' && !this.root.hidden;
+    const active = () => GRIDS.includes(this.view) && !this.root.hidden;
     let start = 0;
     let center = null;
     const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
