@@ -3,7 +3,6 @@ import { Library, VIEWS } from './library.js';
 import { openViewer, closeViewer, isOpen } from './viewer.js';
 import { loadOriginal } from './original.js';
 import { createSelection, recentlyDeleted, rememberDeleted } from './select.js';
-import { itemsLabel } from './format.js';
 import { buildAlbums, rememberAlbumEdit, albumHash } from './albums.js';
 
 const $ = (s) => document.querySelector(s);
@@ -61,7 +60,24 @@ async function boot() {
     albums: state.albums,
   });
   if (owner) {
-    selection = createSelection({ button: $('#select'), root: $('#view'), getPhotos: () => state.photos, getAlbums: () => state.albums });
+    // Where the photos live (older photo lists only have the raw URL).
+    const [, repo = 'tengdu/photos', branch = 'main'] = /githubusercontent\.com\/([^/]+\/[^/]+)\/([^/]+)\//.exec(data.raw) || [];
+    selection = createSelection({
+      button: $('#select'),
+      root: $('#view'),
+      getPhotos: () => state.photos,
+      getAlbums: () => state.albums,
+      repo: data.repo || repo,
+      branch: data.branch || branch,
+      onDeleted: (ids) => {
+        rememberDeleted(ids);
+        removePhotos(new Set(ids));
+      },
+      onAlbumChanged: (op, name, ids) => {
+        rememberAlbumEdit(op, name, ids);
+        refreshAlbums();
+      },
+    });
   }
   document.addEventListener('click', onClick);
   bindPrefetch();
@@ -114,7 +130,6 @@ function prepare(data, hidden = new Set()) {
   });
 }
 
-const SHORTCUT_RETURNS = ['deleted', 'delete-failed', 'album-added', 'album-removed', 'album-failed'];
 const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
 const viewHash = () => (state.view === 'album' ? albumHash(state.album) : `#/${state.view}`);
 const openAlbum = () => state.albums.find((a) => a.name === state.album);
@@ -122,7 +137,6 @@ const openAlbum = () => state.albums.find((a) => a.name === state.album);
 function parseRoute() {
   const [, kind, arg] = /^#\/([a-z-]+)(?:\/(.+))?$/.exec(location.hash) || [];
   if (kind === 'photo') return { photo: arg };
-  if (SHORTCUT_RETURNS.includes(kind)) return { shortcut: kind, arg: arg || '' };
   if (kind === 'map') return { view: 'map', focus: arg };
   if (kind === 'albums') return { view: 'albums' };
   if (kind === 'album' && arg) return { view: 'album', album: decode(arg) };
@@ -132,7 +146,6 @@ function parseRoute() {
 
 function route() {
   const r = parseRoute();
-  if (r.shortcut) return shortcutReturned(r);
   if (r.photo) {
     const p = state.byId.get(r.photo);
     if (!p) return location.replace(viewHash());
@@ -161,35 +174,6 @@ function route() {
   if (state.mapActive) hideMapView();
   library.show(r.view, r.view === 'album' ? r.album : r.anchor);
   selection?.refresh();
-}
-
-// Back from the "Delete from GitHub" or "Add to Album" shortcut (see select.js).
-function shortcutReturned({ shortcut, arg }) {
-  let view = 'all';
-  try { view = sessionStorage.getItem('photos.returnView') || view; } catch {}
-  const [path, query = ''] = arg.split('?');
-  const listed = (ids) => ids.split(',').filter((id) => state.byId.has(id));
-  const what = (ids) => itemsLabel(ids.map((id) => state.byId.get(id))).toLowerCase();
-  if (shortcut === 'deleted' && selection) {
-    const ids = listed(path);
-    const label = what(ids);
-    rememberDeleted(ids);
-    removePhotos(new Set(ids));
-    selection.toast(`Deleted ${label}. The site updates in about a minute.`);
-  } else if ((shortcut === 'album-added' || shortcut === 'album-removed') && selection) {
-    const cut = path.lastIndexOf('/');
-    const name = decode(path.slice(0, cut));
-    const ids = listed(path.slice(cut + 1));
-    const added = shortcut === 'album-added';
-    rememberAlbumEdit(added ? 'add' : 'remove', name, ids);
-    refreshAlbums();
-    selection.toast(added ? `Added ${what(ids)} to “${name}”.` : `Removed ${what(ids)} from “${name}”.`);
-  } else if (shortcut.endsWith('-failed') && selection) {
-    const reason = new URLSearchParams(query).get('errorMessage');
-    const name = shortcut === 'album-failed' ? 'Add to Album' : 'Delete from GitHub';
-    selection.toast(`The “${name}” shortcut didn't finish${reason ? `: ${reason}` : '.'}`);
-  }
-  location.replace(`#/${view}`);
 }
 
 function refreshAlbums() {

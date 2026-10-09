@@ -1,6 +1,6 @@
 // Albums: albums/<album name>/<photo file name without extension>, one empty file per photo (see
-// scripts/build.mjs). The owner changes them with the iPhone/Mac shortcuts (select.js); until the
-// site has been rebuilt, this device remembers the changes so they show at once.
+// scripts/build.mjs). The owner changes them from the site (select.js); until the site has been
+// rebuilt, this device remembers the changes so they show at once.
 const EDITS_KEY = 'photos.albumEdits';
 const KEEP_MS = 10 * 60 * 1000;
 
@@ -36,7 +36,7 @@ export function buildAlbums(raw, byId) {
 /** A typed album name, made safe for a folder name. */
 export const cleanAlbumName = (s) => String(s || '').normalize('NFC').replace(/[/\\]/g, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 80).trim();
 
-/** Repo path of a photo's file in an album, URL-encoded for the GitHub API. */
-export const entryPath = (name, p) => ['albums', name, p.stem].map(encodeURIComponent).join('/');
+/** Repo path of a photo's file in an album. */
+export const entryPath = (name, p) => `albums/${name}/${p.stem}`;
 
 export const albumHash = (name) => `#/album/${encodeURIComponent(name)}`;

@@ -14,38 +14,17 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 
 ### Delete photos and videos
 
-Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on your iPhone, iPad or Mac; `?owner=off` turns it off again. Then, in All Photos or Days, tap **Select**, tap the photos and videos (or **Select All**), **Delete** → **Delete with Shortcut**. The site starts the **Delete from GitHub** shortcut below with the list of files (Live Photo videos and video placeholders included); it deletes them, and Shortcuts returns to the site, where they disappear at once. The site rebuilds once, about a minute after the last deletion; that build also deletes the videos whose placeholder is gone from the release. Deleted photos stay in the repository's Git history; deleted videos are gone for good.
+Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on your iPhone, iPad or Mac; `?owner=off` turns it off again. Then, in All Photos or Days, tap **Select**, tap the photos and videos (or **Select All**), **Delete** → **Delete**. The site removes them from the repository in one commit (Live Photo videos, video placeholders and album entries included) and they disappear at once; the site rebuilds about a minute later, and that build also deletes the videos whose placeholder is gone from the release. Deleted photos stay in the repository's Git history; deleted videos are gone for good.
 
 ### Albums
 
-In All Photos, Days or an album, tap **Select**, pick photos, then the **Add to Album** button (next to Delete): pick an album, or type a new name and tap **Create**. The site starts the **Add to Album** shortcut below, and the photos show in the album at once. Inside an album, **Remove** takes photos out of it with the **Delete from GitHub** shortcut; they stay in the library. Deleting a photo also takes it out of its albums.
+In All Photos, Days or an album, tap **Select**, pick photos, then the **Add to Album** button (next to Delete): pick an album, or type a new name and tap **Create**. Inside an album, **Remove** takes photos out of it; they stay in the library. Deleting a photo also takes it out of its albums.
 
-An album is a folder in the repo, `albums/<album name>/`, with one tiny file per photo named after the photo's file (without its extension), so you can also create or edit albums on GitHub. Like everything here, albums are public.
+An album is a folder in the repo, `albums/<album name>/`, with one empty file per photo named after the photo's file (without its extension), so albums can also be made or edited on GitHub. Like everything here, albums are public.
 
-### Add to Album shortcut
+### Your token on the site
 
-The quickest way: in the Shortcuts app, long-press **Delete from GitHub** → **Duplicate**, rename the copy **Add to Album**, then:
-
-1. Delete its first **Get Contents of URL** (Method GET) and the **Get Dictionary Value** after it.
-2. In the remaining **Get Contents of URL**: set Method to **PUT**, and in the JSON body set `message` (Text) = `Add to album` and replace the `sha` field with `content` (Text) = `MQ==`.
-
-So it reads: **Text** (token) → **Set Variable** `Token` → **Split Text** (*Shortcut Input*, New Lines) → **Repeat with Each** → **Get Contents of URL** (URL `https://api.github.com/repos/tengdu/photos/contents/`**Repeat Item**, Method **PUT**, the same headers, JSON `message` and `content`) → **End Repeat**. Like Delete from GitHub, it must receive **Text**.
-
-### Delete from GitHub shortcut
-
-Shortcuts app → **+** → name it exactly **Delete from GitHub**. The site gives it a list of file paths, one per line, as its input.
-
-| # | Action | Settings |
-|---|---|---|
-| 1 | **Text** | paste your GitHub token (the same one as the upload shortcut) → **Set Variable** `Token` |
-| 2 | **Split Text** | *Shortcut Input*, Separator: **New Lines** |
-| 3 | **Repeat with Each** | item in *Split Text* |
-| 4 | ↳ **Get Contents of URL** | URL `https://api.github.com/repos/tengdu/photos/contents/`**Repeat Item**, Method **GET**, Headers `Authorization` = `Bearer `**Token**, `Accept` = `application/vnd.github+json` |
-| 5 | ↳ **Get Dictionary Value** | Get **Value** for key `sha` in *Contents of URL* |
-| 6 | ↳ **Get Contents of URL** | the same URL, Method **DELETE**, the same Headers, Request Body **JSON**: `message` (Text) = `Delete `**Repeat Item**, `sha` (Text) = **Dictionary Value** |
-| 7 | **End Repeat** | |
-
-The first time it runs, iOS asks whether the shortcut may connect to api.github.com: choose **Always Allow**. If the shortcut runs but finds no files, open its **ⓘ** details, turn on **Show in Share Sheet** and set it to receive **Text**, so it accepts the list from the site.
+The first time you change something during a visit, the site asks for your GitHub token: the fine-grained one from the Upload shortcut, or a second one made the same way (Contents: Read and write, only `tengdu/photos`). Let the password manager save it: Safari offers to save it in **Passwords** (iCloud Keychain); if it doesn't, add it in the Passwords app with website `tengdu.github.io` and user name `tengdu/photos`. From then on, tap the field and pick it (Face ID). The site keeps the token only in memory until the page is closed and never writes it to the browser's storage, which this site shares with every other `tengdu.github.io` site.
 
 ### Hide places near home (optional)
 

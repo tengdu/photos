@@ -517,7 +517,7 @@ async function main() {
 
   items.sort((a, b) => instant(b.taken) - instant(a.taken) || (a.path < b.path ? 1 : -1));
   const albums = await readAlbums(stemIds, new Map(items.map((it, i) => [it.id, i])));
-  const json = JSON.stringify({ raw: RAW_BASE, items, albums });
+  const json = JSON.stringify({ raw: RAW_BASE, repo: REPO, branch: BRANCH, items, albums });
   await writeFile(path.join(OUT, 'photos.json'), json);
   await bundle(sha1(json).slice(0, 10));
 

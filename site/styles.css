@@ -471,6 +471,18 @@ html[data-selecting] .tile.selected::after {
 .sheet-btn { flex: 1; height: 42px; border: 0; border-radius: 12px; background: var(--pill); font-size: 15px; font-weight: 600; cursor: pointer; }
 .sheet-danger { background: #ff3b30; color: #fff; }
 .sheet-primary { flex: none; padding: 0 18px; background: var(--accent); color: #fff; }
+.sheet-input {
+  display: block; width: 100%; height: 44px; margin: 4px 0 12px; padding: 0 12px;
+  border: 0; border-radius: 12px; background: var(--pill); color: var(--fg);
+  font: inherit; font-size: 16px; /* 16px: iOS doesn't zoom in */
+}
+.sheet p.sheet-error { margin-top: -4px; color: #ff3b30; }
+.sheet p.sheet-busy { display: flex; align-items: center; gap: 10px; margin: 6px 0; color: var(--fg); font-size: 16px; font-weight: 600; }
+.sheet-busy .spin {
+  width: 18px; height: 18px; flex: none; border-radius: 50%;
+  border: 2.5px solid var(--pill); border-top-color: var(--accent);
+  animation: ring-spin 0.8s linear infinite;
+}
 .pick-new { display: flex; gap: 8px; margin: 4px 0 12px; }
 .pick-new input {
   flex: 1; min-width: 0; height: 42px; padding: 0 12px;

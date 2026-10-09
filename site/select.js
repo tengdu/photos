@@ -1,13 +1,11 @@
-// Owner-only: select photos in All Photos, Days or an album, then delete them, add them to an album
-// or remove them from the album, with the "Delete from GitHub" and "Add to Album" shortcuts
-// (iPhone, iPad, Mac). The shortcuts hold the GitHub token; the site stores none.
+// Owner-only: select photos in All Photos, Days or an album, then delete them, add them to an
+// album, or remove them from the album. Each change is one commit through the GitHub API with the
+// owner's token. The token lives in the device's passwords (iCloud Keychain…), which fill it in
+// when the site asks; the site keeps it only in memory, never in its storage.
 import { itemsLabel } from './format.js';
 import { cleanAlbumName, entryPath } from './albums.js';
+import { checkToken, commitChanges } from './github.js';
 
-const DELETE_SHORTCUT = 'Delete from GitHub';
-const ADD_SHORTCUT = 'Add to Album';
-// Shortcuts can be started from a web page on iPhone, iPad (reports itself as Macintosh) and Mac.
-const HAS_SHORTCUTS = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent);
 const DELETED_KEY = 'photos.deleted';
 const HIDE_FOR_MS = 30 * 60 * 1000; // until the rebuilt site no longer lists them
 
@@ -18,7 +16,7 @@ const store = {
   del: (k) => { try { localStorage.removeItem(k); } catch {} },
 };
 
-// An earlier version could keep a GitHub token in the browser; make sure none is left behind.
+// An earlier version could keep a GitHub token in the browser's storage; make sure none is left.
 store.del('photos.token');
 
 /** Ids deleted from this device recently: hidden even if the site hasn't been rebuilt yet. */
@@ -38,31 +36,20 @@ export function rememberDeleted(ids) {
   store.set(DELETED_KEY, JSON.stringify(map));
 }
 
-// A repo path, URL-encoded: the shortcuts append it to the GitHub API's URL.
-const apiPath = (path) => path.split('/').map(encodeURIComponent).join('/');
-const idList = (photos) => photos.map((p) => p.id).join(',');
+let token = null; // in memory only, while the page is open
 
-/**
- * x-callback-url that runs a shortcut with `lines` (one repo path per line) as its input.
- * Shortcuts then returns to the site: to `success` when it finished, to `error` if it failed,
- * or to `cancel`.
- */
-export function shortcutUrl({ shortcut, lines, success, cancel, error }) {
-  const params = new URLSearchParams({
-    name: shortcut,
-    input: 'text',
-    text: lines.join('\n'),
-    'x-success': success,
-    'x-cancel': cancel,
-    'x-error': error,
-  });
-  return `shortcuts://x-callback-url/run-shortcut?${params.toString().replace(/\+/g, '%20')}`;
+function reason(e) {
+  if (e?.status === 401) return 'The token is wrong or has expired.';
+  if (e?.status === 403 || e?.status === 404) return "This token can't change the photo repository.";
+  if (e?.status === 0) return "Couldn't reach GitHub. Check the connection and try again.";
+  return e?.message || 'Something went wrong.';
 }
 
-export function createSelection({ button, root, getPhotos, getAlbums }) {
+export function createSelection({ button, root, getPhotos, getAlbums, repo, branch, onDeleted, onAlbumChanged }) {
   const selected = new Set();
   let active = false;
   let album = null; // the album on screen: its trash button removes photos from it
+  let pendingToken = null; // resolves the token prompt
 
   const bar = document.createElement('div');
   bar.className = 'selbar';
@@ -117,13 +104,20 @@ export function createSelection({ button, root, getPhotos, getAlbums }) {
     }
   });
 
+  function openSheet(html) {
+    sheet.innerHTML = html;
+    sheet.onclick = null;
+    sheetWrap.hidden = false;
+  }
+
   function closeSheet() {
     sheetWrap.hidden = true;
     sheet.innerHTML = '';
     sheetWrap.style.paddingBottom = '';
+    pendingToken?.(null);
   }
-  sheetWrap.addEventListener('click', (e) => e.target === sheetWrap && closeSheet());
-  // Keep the sheet above the on-screen keyboard while typing an album name.
+  sheetWrap.addEventListener('click', (e) => e.target === sheetWrap && !sheet.querySelector('.sheet-busy') && closeSheet());
+  // Keep the sheet above the on-screen keyboard while typing.
   window.visualViewport?.addEventListener('resize', () => {
     if (sheetWrap.hidden) return;
     const keyboard = innerHeight - visualViewport.height - visualViewport.offsetTop;
@@ -143,49 +137,54 @@ export function createSelection({ button, root, getPhotos, getAlbums }) {
     return [...selected].map((id) => byId.get(id)).filter(Boolean);
   }
 
+  const names = (photos) => photos.slice(0, 4).map((p) => esc(p.name)).join(', ') + (photos.length > 4 ? `, and ${photos.length - 4} more` : '');
+  const what = (photos) => (photos.length === 1 ? photos[0].name : itemsLabel(photos).toLowerCase());
+
+  function confirm(title, photos, action, onConfirm) {
+    openSheet(`<h3>${esc(title)}</h3>
+      <p>${names(photos)}</p>
+      <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Cancel</button>
+        <button type="button" class="sheet-btn sheet-danger" data-act="run">${action}</button></div>`);
+    sheet.onclick = (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'cancel') closeSheet();
+      if (act === 'run') onConfirm();
+    };
+  }
+
   function confirmDelete() {
     const photos = chosen();
     if (!photos.length) return;
-    // Their files, and their entries in albums.
-    const lines = photos.flatMap((p) => [p.path, p.live].filter(Boolean).map(apiPath));
-    for (const a of getAlbums()) for (const p of photos) if (a.items.includes(p)) lines.push(entryPath(a.name, p));
-    confirm(`Delete ${itemsLabel(photos)}?`, photos, 'Delete with Shortcut',
-      () => run({ shortcut: DELETE_SHORTCUT, lines, done: `deleted/${idList(photos)}`, failed: 'delete-failed' }));
+    // The files, and their entries in albums.
+    const remove = photos.flatMap((p) => [p.path, p.live].filter(Boolean));
+    for (const a of getAlbums()) for (const p of photos) if (a.items.includes(p)) remove.push(entryPath(a.name, p));
+    confirm(`Delete ${itemsLabel(photos)}?`, photos, 'Delete', () => save('Deleting…', { remove, message: `Delete ${what(photos)}` }, () => {
+      onDeleted(photos.map((p) => p.id));
+      return `Deleted ${itemsLabel(photos).toLowerCase()}. The site updates in about a minute.`;
+    }));
   }
 
-  // In an album: remove its entries for these photos; the photos stay in the library.
+  // In an album: take the photos out of it; they stay in the library.
   function confirmRemove() {
     const photos = chosen();
     if (!photos.length) return;
     const name = album;
-    confirm(`Remove ${itemsLabel(photos)} from “${name}”?`, photos, 'Remove with Shortcut',
-      () => run({ shortcut: DELETE_SHORTCUT, lines: photos.map((p) => entryPath(name, p)), done: `album-removed/${encodeURIComponent(name)}/${idList(photos)}`, failed: 'delete-failed' }));
-  }
-
-  function confirm(title, photos, action, onRun) {
-    const names = photos.slice(0, 4).map((p) => esc(p.name)).join(', ') + (photos.length > 4 ? `, and ${photos.length - 4} more` : '');
-    sheet.innerHTML = `<h3>${esc(title)}</h3>
-      <p>${names}</p>
-      <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Cancel</button>
-        <button type="button" class="sheet-btn sheet-danger" data-act="run">${action}</button></div>`;
-    sheetWrap.hidden = false;
-    sheet.onclick = (e) => {
-      const act = e.target.closest('[data-act]')?.dataset.act;
-      if (act === 'cancel') closeSheet();
-      if (act === 'run') onRun();
-    };
+    confirm(`Remove ${itemsLabel(photos)} from “${name}”?`, photos, 'Remove',
+      () => save('Removing…', { remove: photos.map((p) => entryPath(name, p)), message: `Remove ${what(photos)} from album “${name}”` }, () => {
+        onAlbumChanged('remove', name, photos.map((p) => p.id));
+        return `Removed ${itemsLabel(photos).toLowerCase()} from “${name}”.`;
+      }));
   }
 
   function chooseAlbum() {
     const photos = chosen();
     if (!photos.length) return;
     const albums = getAlbums().filter((a) => a.name !== album);
-    sheet.innerHTML = `<h3>Add ${itemsLabel(photos)} to an Album</h3>
+    openSheet(`<h3>Add ${itemsLabel(photos)} to an Album</h3>
       <form class="pick-new"><input name="album" type="text" maxlength="80" placeholder="New album" autocomplete="off" enterkeyhint="done" aria-label="New album name">
         <button type="submit" class="sheet-btn sheet-primary">Create</button></form>
       ${albums.length ? `<div class="pick">${albums.map((a, i) => `<button type="button" class="pick-row" data-i="${i}"><img src="${a.items[0].thumb}" alt=""><span><b>${esc(a.name)}</b><small>${a.items.length.toLocaleString('en-US')}</small></span></button>`).join('')}</div>` : ''}
-      <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Cancel</button></div>`;
-    sheetWrap.hidden = false;
+      <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Cancel</button></div>`);
     sheet.onclick = (e) => {
       if (e.target.closest('[data-act="cancel"]')) return closeSheet();
       const row = e.target.closest('.pick-row');
@@ -209,17 +208,69 @@ export function createSelection({ button, root, getPhotos, getAlbums }) {
       showToast(`Already in “${name}”.`);
       return;
     }
-    run({ shortcut: ADD_SHORTCUT, lines: add.map((p) => entryPath(name, p)), done: `album-added/${encodeURIComponent(name)}/${idList(add)}`, failed: 'album-failed' });
+    save('Adding…', { add: add.map((p) => ({ path: entryPath(name, p) })), message: `Add ${what(add)} to album “${name}”` }, () => {
+      onAlbumChanged('add', name, add.map((p) => p.id));
+      return `Added ${itemsLabel(add).toLowerCase()} to “${name}”.`;
+    });
   }
 
-  function run({ shortcut, lines, done, failed }) {
-    // Shortcuts comes back to this view.
-    const view = /^#\/(all|days|album\/[^/?#]+)/.exec(location.hash)?.[1] || 'all';
-    try { sessionStorage.setItem('photos.returnView', view); } catch {}
-    closeSheet();
-    setActive(false);
-    const base = `${location.origin}${location.pathname}`;
-    location.href = shortcutUrl({ shortcut, lines, success: `${base}#/${done}`, cancel: `${base}#/${view}`, error: `${base}#/${failed}/${view}` });
+  // Commit the change (asking for the token first if this page doesn't have it), then update
+  // the page and say what happened.
+  async function save(busy, change, done) {
+    try {
+      if (!token) {
+        token = await askToken();
+        if (!token) return;
+      }
+      openSheet(`<p class="sheet-busy"><i class="spin" aria-hidden="true"></i>${busy}</p>`);
+      await commitChanges({ token, repo, branch, ...change });
+      const message = done();
+      closeSheet();
+      setActive(false);
+      showToast(message);
+    } catch (e) {
+      if (e?.status === 401) token = null; // ask again next time
+      openSheet(`<h3>Couldn't save the change</h3><p>${esc(reason(e))}</p>
+        <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Close</button></div>`);
+      sheet.onclick = (ev) => ev.target.closest('[data-act="cancel"]') && closeSheet();
+    }
+  }
+
+  // A sign-in style form, so the device's password manager offers to save the token and fills it
+  // in later (Face ID / Touch ID). The hidden user name is what the saved password is listed under.
+  function askToken() {
+    return new Promise((resolve) => {
+      openSheet(`<h3>GitHub Token</h3>
+        <form class="token-form" method="post" action="#">
+          <input type="text" name="username" autocomplete="username" value="${esc(repo)}" hidden>
+          <input class="sheet-input" type="password" name="password" autocomplete="current-password" placeholder="Token" aria-label="GitHub token" required>
+          <p class="sheet-error" hidden></p>
+          <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Cancel</button>
+            <button type="submit" class="sheet-btn sheet-primary">Continue</button></div>
+        </form>`);
+      pendingToken = (value) => {
+        pendingToken = null;
+        resolve(value);
+      };
+      const form = sheet.querySelector('form');
+      sheet.onclick = (e) => e.target.closest('[data-act="cancel"]') && closeSheet();
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const value = form.elements.password.value.trim();
+        const error = form.querySelector('.sheet-error');
+        const submit = form.querySelector('[type="submit"]');
+        submit.disabled = true;
+        try {
+          await checkToken(value, repo);
+          pendingToken?.(value);
+        } catch (err) {
+          error.textContent = reason(err);
+          error.hidden = false;
+          submit.disabled = false;
+        }
+      };
+      form.elements.password.focus();
+    });
   }
 
   return {
@@ -229,11 +280,11 @@ export function createSelection({ button, root, getPhotos, getAlbums }) {
       else selected.add(id);
       render();
     },
-    /** Show the Select button only where tiles can be selected (and Shortcuts exists). */
+    /** Show the Select button only where tiles can be selected; `inAlbum`: the album shown. */
     setAvailable(on, inAlbum = null) {
       if (inAlbum !== album && active) setActive(false);
       album = inAlbum;
-      button.hidden = !(on && HAS_SHORTCUTS);
+      button.hidden = !on;
       if (button.hidden && active) setActive(false);
     },
     refresh: render,
