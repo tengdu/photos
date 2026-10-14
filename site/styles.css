@@ -509,3 +509,14 @@ html[data-selecting] .tile.selected::after {
   box-shadow: var(--shadow);
 }
 .toast[hidden] { display: none; }
+.date-field { display: block; }
+.date-field > span { display: block; font-size: 13px; font-weight: 600; color: var(--fg-2); }
+.date-field .sheet-input { margin-top: 6px; -webkit-appearance: none; appearance: none; }
+.date-field select.sheet-input { cursor: pointer; }
+.date-mode { display: flex; flex-direction: column; gap: 2px; margin: -2px 0 10px; }
+.date-mode label { display: flex; align-items: flex-start; gap: 10px; padding: 7px 2px; font-size: 15px; cursor: pointer; }
+.date-mode input { margin: 3px 0 0; accent-color: var(--accent); }
+.date-mode span { display: flex; flex-direction: column; }
+.date-mode small { font-size: 13px; color: var(--fg-2); }
+.sheet p.date-note { color: var(--fg); }
+.sheet p.date-note:empty { display: none; }

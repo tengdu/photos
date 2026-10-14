@@ -4,6 +4,7 @@ import { openViewer, closeViewer, isOpen } from './viewer.js';
 import { loadOriginal } from './original.js';
 import { createSelection, recentlyDeleted, rememberDeleted } from './select.js';
 import { buildAlbums, rememberAlbumEdit, albumHash } from './albums.js';
+import { rememberDateEdits, withRecentDates, newestFirst } from './dates.js';
 
 const $ = (s) => document.querySelector(s);
 const state = {
@@ -77,6 +78,10 @@ async function boot() {
         rememberAlbumEdit(op, name, ids);
         refreshAlbums();
       },
+      onDatesChanged: (changes) => {
+        rememberDateEdits(changes);
+        redate(changes);
+      },
     });
   }
   document.addEventListener('click', onClick);
@@ -111,9 +116,15 @@ async function loadPhotoList() {
   return res.ok ? res.json() : list;
 }
 
+const dateKeys = (taken) => ({
+  day: taken ? taken.slice(0, 10) : 'unknown',
+  month: taken ? taken.slice(0, 7) : 'unknown',
+  year: taken ? taken.slice(0, 4) : 'unknown',
+});
+
 function prepare(data, hidden = new Set()) {
   const url = (path) => data.raw + path.split('/').map(encodeURIComponent).join('/');
-  return data.items.filter((it) => !hidden.has(it.id)).map((it, index) => {
+  return withRecentDates(data.items).filter((it) => !hidden.has(it.id)).map((it, index) => {
     const name = it.path.split('/').pop().replace(/\.release$/, '');
     return {
       ...it,
@@ -123,9 +134,7 @@ function prepare(data, hidden = new Set()) {
       thumb: `m/${it.id}.webp`,
       name,
       stem: name.replace(/\.[^.]+$/, ''), // how albums refer to it
-      day: it.taken ? it.taken.slice(0, 10) : 'unknown',
-      month: it.taken ? it.taken.slice(0, 7) : 'unknown',
-      year: it.taken ? it.taken.slice(0, 4) : 'unknown',
+      ...dateKeys(it.taken),
     };
   });
 }
@@ -184,6 +193,19 @@ function refreshAlbums() {
 // After deleting: drop the photos everywhere and redraw.
 function removePhotos(ids) {
   state.photos = state.photos.filter((p) => !ids.has(p.id)).map((p, index) => ({ ...p, index }));
+  state.byId = new Map(state.photos.map((p) => [p.id, p]));
+  library.setPhotos(state.photos);
+  refreshAlbums();
+  mapModule?.resetMap();
+}
+
+// After changing dates: move the photos to their new place in the library and redraw.
+function redate(changes) {
+  const byId = new Map(changes.map((c) => [c.id, c.taken]));
+  state.photos = state.photos
+    .map((p) => (byId.has(p.id) ? { ...p, taken: byId.get(p.id), undated: undefined, ...dateKeys(byId.get(p.id)) } : p))
+    .sort(newestFirst)
+    .map((p, index) => ({ ...p, index }));
   state.byId = new Map(state.photos.map((p) => [p.id, p]));
   library.setPhotos(state.photos);
   refreshAlbums();

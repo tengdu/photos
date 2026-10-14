@@ -110,16 +110,22 @@ export function parseHeif(input) {
         const id = version < 2 ? r.u16() : r.u32();
         const method = version >= 1 ? r.u16() & 15 : 0;
         r.u16(); // data reference index
-        const base = r.uN(baseOffsetSize);
+        // Where the fields are, so a writer can point an item somewhere else (exif-date.js).
+        const loc = { baseAt: r.at, baseSize: baseOffsetSize, offsetSize, lengthSize, fields: [] };
+        const base = (loc.base = r.uN(baseOffsetSize));
         const n = r.u16();
         const extents = [];
         for (let k = 0; k < n; k++) {
           if (indexSize) r.uN(indexSize);
-          const offset = r.uN(offsetSize), length = r.uN(lengthSize);
+          const offsetAt = r.at;
+          const offset = r.uN(offsetSize);
+          const lengthAt = r.at;
+          const length = r.uN(lengthSize);
           extents.push({ offset: base + offset, length });
+          loc.fields.push({ offsetAt, lengthAt });
         }
         const item = heif.items.get(id) || { id, props: [] };
-        Object.assign(item, { method, extents });
+        Object.assign(item, { method, extents, loc });
         heif.items.set(id, item);
       }
     } else if (b.type === 'iref') {
@@ -199,10 +205,15 @@ export function primarySize(heif) {
   return quarterTurns % 2 ? { width: ispe.height, height: ispe.width } : { width: ispe.width, height: ispe.height };
 }
 
+/** The EXIF item describing the primary image, or undefined. */
+export function exifItem(heif) {
+  const exifItems = [...heif.items.values()].filter((i) => i.type === 'Exif');
+  return exifItems.find((i) => refsFrom(heif, 'cdsc', i.id).includes(heif.primaryId)) || exifItems[0];
+}
+
 /** The EXIF block of the primary image as a TIFF stream (starts with "MM" or "II"), or null. */
 export function exifTiff(heif) {
-  const exifItems = [...heif.items.values()].filter((i) => i.type === 'Exif');
-  const item = exifItems.find((i) => refsFrom(heif, 'cdsc', i.id).includes(heif.primaryId)) || exifItems[0];
+  const item = exifItem(heif);
   if (!item) return null;
   const data = itemData(heif, item.id);
   const skip = new DataView(data.buffer, data.byteOffset).getUint32(0);

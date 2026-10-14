@@ -79,13 +79,15 @@ async function readExif(input) {
 }
 
 // "2026:10:04 14:23:24" + "-05:00" → "2026-10-04T14:23:24-05:00" (the photo's own local time).
-function takenAt(exif, file) {
+function exifDate(exif) {
   const m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(exif.DateTimeOriginal || exif.CreateDate || '');
-  if (m && m[1] !== '0000') {
-    const off = exif.OffsetTimeOriginal || exif.OffsetTime;
-    return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${/^[+-]\d{2}:\d{2}$/.test(off || '') ? off : ''}`;
-  }
-  // No EXIF date: use the upload time in the file name (YYYYMMDD-HHmmss-...).
+  if (!m || m[1] === '0000') return null;
+  const off = exif.OffsetTimeOriginal || exif.OffsetTime;
+  return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${/^[+-]\d{2}:\d{2}$/.test(off || '') ? off : ''}`;
+}
+
+// No date in the file: the upload time in the file name (YYYYMMDD-HHmmss-...).
+function uploadDate(file) {
   const s = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(path.basename(file));
   return s ? `${s[1]}-${s[2]}-${s[3]}T${s[4]}:${s[5]}:${s[6]}` : null;
 }
@@ -277,7 +279,11 @@ async function pruneCache(ids) {
 async function processItem(item, tmpDir) {
   const metaFile = path.join(CACHE, `${item.id}.json`);
   const webp = path.join(CACHE, `${item.id}.webp`);
-  if (await exists(metaFile) && await exists(webp)) return JSON.parse(await readFile(metaFile, 'utf8'));
+  if (await exists(metaFile) && await exists(webp)) {
+    const meta = JSON.parse(await readFile(metaFile, 'utf8'));
+    meta.dated ??= meta.taken !== uploadDate(item.still || item.video); // cached before `dated` existed
+    return meta;
+  }
   const meta = item.still ? await processPhoto(item, tmpDir, webp) : await processVideo(item, tmpDir, webp);
   await writeFile(metaFile, JSON.stringify(meta));
   return meta;
@@ -320,7 +326,8 @@ async function processVideo(item, tmpDir, webp) {
     ensureFfmpeg();
     const { th } = await preview(sharp(videoFrame(file, info.color)), webp);
     return {
-      taken: info.taken || takenAt({}, item.video),
+      taken: info.taken || uploadDate(item.video),
+      dated: !!info.taken,
       w: info.w,
       h: info.h,
       th,
@@ -367,8 +374,10 @@ async function processPhoto(item, tmpDir, webp) {
 
   const lat = exif.latitude, lon = exif.longitude;
   const geo = Number.isFinite(lat) && Number.isFinite(lon) && (lat || lon) ? [round(lat, 5), round(lon, 5)] : null;
+  const taken = exifDate(exif);
   return {
-    taken: takenAt(exif, item.still),
+    taken: taken || uploadDate(item.still),
+    dated: !!taken,
     w, h,
     th: out.th,
     fmt: item.ext === '.jpeg' ? 'jpg' : item.ext.slice(1),
@@ -496,6 +505,7 @@ async function main() {
         path: item.still || item.video,
         ...(item.asset && { url: item.asset.browser_download_url }),
         taken: meta.taken,
+        ...(!meta.dated && { undated: true }), // `taken` is the upload time
         w: meta.w,
         h: meta.h,
         th: meta.th,

@@ -22,6 +22,12 @@ In All Photos, Days or an album, tap **Select**, pick photos, then the **Add to 
 
 An album is a folder in the repo, `albums/<album name>/`, with one empty file per photo named after the photo's file (without its extension), so albums can also be made or edited on GitHub. Like everything here, albums are public.
 
+### Change the date
+
+Some photos have no capture date in the file (screenshots, saved or edited images); the site then shows their upload time. To fix it, in All Photos, Days or an album, tap **Select**, pick the photos, then the **calendar** button: set the date, time and time zone, and tap **Adjust**. With several photos you choose between **Shift all by the same amount**, which keeps their order and gives the earliest photo the new time (as in Apple Photos), or **Same date & time for all**. The sheet says which of them have no date in the file.
+
+The date is written into the original file itself (EXIF `DateTimeOriginal`, `DateTimeDigitized` and the time zone), so it goes along when you download it; everything else in the file, the image included, is left untouched. All the photos change in one commit, and the site rebuilds a minute later. This works for JPEG and HEIC photos; videos (and a Live Photo's motion) keep their date.
+
 ### Your token on the site
 
 The first time you change something during a visit, the site asks for your GitHub token: the fine-grained one from the Upload shortcut, or a second one made the same way (Contents: Read and write, only `tengdu/photos`). Let the password manager save it: Safari offers to save it in **Passwords** (iCloud Keychain); if it doesn't, add it in the Passwords app with website `tengdu.github.io` and user name `tengdu/photos`. From then on, tap the field and pick it (Face ID). The site keeps the token only in memory until the page is closed and never writes it to the browser's storage, which this site shares with every other `tengdu.github.io` site.

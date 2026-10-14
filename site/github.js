@@ -35,13 +35,42 @@ export async function checkToken(token, repo) {
   if (r.permissions && !r.permissions.push) throw new GitHubError(403, `This token can't change ${repo}`);
 }
 
+const repoPath = (path) => path.split('/').map(encodeURIComponent).join('/');
+
+/** A file's current bytes on `branch` (from the API, not the CDN, which may be minutes behind). */
+export async function readFile({ token, repo, branch, path }) {
+  let res;
+  try {
+    res = await fetch(`${API}/repos/${repo}/contents/${repoPath(path)}?ref=${encodeURIComponent(branch)}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.raw+json', 'X-GitHub-Api-Version': '2022-11-28' },
+      cache: 'no-store',
+    });
+  } catch {
+    throw new GitHubError(0, "Couldn't reach GitHub");
+  }
+  if (!res.ok) throw new GitHubError(res.status, (await res.json().catch(() => null))?.message || res.statusText);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+function base64(bytes) {
+  if (bytes.toBase64) return bytes.toBase64();
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** Uploads bytes as a Git blob (for `put` in commitChanges); returns its sha. */
+export async function uploadBlob({ token, repo, bytes }) {
+  return (await call(token, `/repos/${repo}/git/blobs`, { method: 'POST', body: JSON.stringify({ content: base64(bytes), encoding: 'base64' }) })).sha;
+}
+
 /**
- * One commit on `branch` that adds files ({ path, content }) and removes paths. Files that are
- * already there (or already gone) are left alone. Returns the commit's sha, or null if there was
- * nothing to change.
+ * One commit on `branch` that adds files ({ path, content }), replaces files with uploaded blobs
+ * (put: { path, sha }) and removes paths. Files that are already there (or already gone) are not
+ * added (removed) again. Returns the commit's sha, or null if there was nothing to change.
  */
-export async function commitChanges({ token, repo, branch, add = [], remove = [], message }) {
-  const ref = `heads/${branch.split('/').map(encodeURIComponent).join('/')}`;
+export async function commitChanges({ token, repo, branch, add = [], put = [], remove = [], message }) {
+  const ref = `heads/${repoPath(branch)}`;
   for (let attempt = 1; ; attempt++) {
     const head = (await call(token, `/repos/${repo}/git/ref/${ref}`)).object.sha;
     const commit = await call(token, `/repos/${repo}/git/commits/${head}`);
@@ -49,6 +78,7 @@ export async function commitChanges({ token, repo, branch, add = [], remove = []
     const existing = new Set(tree.tree.filter((e) => e.type === 'blob').map((e) => e.path));
     const changes = [
       ...add.filter((f) => !existing.has(f.path)).map((f) => ({ path: f.path, mode: '100644', type: 'blob', content: f.content ?? '' })),
+      ...put.map((f) => ({ path: f.path, mode: '100644', type: 'blob', sha: f.sha })),
       ...remove.filter((p) => existing.has(p)).map((path) => ({ path, mode: '100644', type: 'blob', sha: null })),
     ];
     if (!changes.length) return null;
