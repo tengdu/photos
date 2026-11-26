@@ -16,6 +16,15 @@ Original photos from my iPhone, published as a gallery at **https://tengdu.githu
 
 Open the site once with **`?owner`** (https://tengdu.github.io/photos/?owner) on your iPhone, iPad or Mac; `?owner=off` turns it off again. Then, in All Photos or Days, tap **Select**, tap the photos and videos (or **Select All**), **Delete** → **Delete**. The site removes them from the repository in one commit (Live Photo videos, video placeholders and album entries included) and they disappear at once; the site rebuilds about a minute later, and that build also deletes the videos whose placeholder is gone from the release. Deleted photos stay in the repository's Git history; deleted videos are gone for good.
 
+### Upload from a computer
+
+With `?owner` on, the **upload** button (the arrow next to Select) opens **Choose Files…** or **Choose Folder…** (subfolders included); you can also drag files or a whole folder from Finder onto the page. The site lists what it will upload and, optionally, an album to put it in (type a new name or pick one), then **Upload** puts the untouched originals into `photos/` in one commit, named like the Shortcut names them (`<upload time>-<file name>`), and the site rebuilds about a minute later.
+
+- A photo and a `.mov` with the same name in the same folder become a Live Photo.
+- Files already in the library (identical content) are left out; with an album chosen, they're added to it.
+- Other files (`.dng`, `.aae`, …) are skipped and listed.
+- Videos over 40 MB are skipped: they belong in the **media** release, and GitHub's release upload doesn't accept uploads from a web page. Use the iPhone Shortcut for those.
+
 ### Albums
 
 In All Photos, Days or an album, tap **Select**, pick photos, then the **Add to Album** button (next to Delete): pick an album, or type a new name and tap **Create**. Inside an album, **Remove** takes photos out of it; they stay in the library. Deleting a photo also takes it out of its albums.

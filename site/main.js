@@ -17,7 +17,7 @@ let mapModule;
 
 boot();
 
-// "?owner" marks this browser as the owner's (Select & delete); "?owner=off" undoes it.
+// "?owner" marks this browser as the owner's (Select, Upload…); "?owner=off" undoes it.
 function ownerMode() {
   const params = new URLSearchParams(location.search);
   try {
@@ -65,6 +65,7 @@ async function boot() {
     const [, repo = 'tengdu/photos', branch = 'main'] = /githubusercontent\.com\/([^/]+\/[^/]+)\/([^/]+)\//.exec(data.raw) || [];
     selection = createSelection({
       button: $('#select'),
+      uploadButton: $('#upload'),
       root: $('#view'),
       getPhotos: () => state.photos,
       getAlbums: () => state.albums,

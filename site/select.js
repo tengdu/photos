@@ -1,9 +1,10 @@
 // Owner-only: select photos in All Photos, Days or an album, then delete them, add them to an
-// album, remove them from the album, or change their date. Each change is one commit through the
+// album, remove them from the album, or change their date; and upload photos from this device. Each change is one commit through the
 // GitHub API with the owner's token. The token lives in the device's passwords (iCloud Keychain…),
 // which fill it in when the site asks; the site keeps it only in memory, never in its storage.
 import { itemsLabel, takenLabel } from './format.js';
 import { cleanAlbumName, entryPath } from './albums.js';
+import { ACCEPT, MAX_LABEL, droppedFiles, pickedFiles, planUpload } from './upload.js';
 import { checkToken, commitChanges, readFile, uploadBlob, GitHubError } from './github.js';
 import { canSetDate, parseTaken, inputValue, takenString, exifString, deviceOffset, OFFSETS, offsetLabel, shiftLabel } from './dates.js';
 
@@ -46,7 +47,7 @@ function reason(e) {
   return e?.message || 'Something went wrong.';
 }
 
-export function createSelection({ button, root, getPhotos, getAlbums, repo, branch, onDeleted, onAlbumChanged, onDatesChanged }) {
+export function createSelection({ button, uploadButton, root, getPhotos, getAlbums, repo, branch, onDeleted, onAlbumChanged, onDatesChanged }) {
   const selected = new Set();
   let active = false;
   let album = null; // the album on screen: its trash button removes photos from it
@@ -328,6 +329,16 @@ export function createSelection({ button, root, getPhotos, getAlbums, repo, bran
     };
   }
 
+  const setBusy = (text) => openSheet(`<p class="sheet-busy"><i class="spin" aria-hidden="true"></i>${esc(text)}</p>`);
+  // Closing the page now would cut the change off halfway.
+  addEventListener('beforeunload', (e) => !sheetWrap.hidden && sheet.querySelector('.sheet-busy') && e.preventDefault());
+
+  function showMessage(title, lines) {
+    openSheet(`<h3>${esc(title)}</h3>${lines.map((l) => `<p>${l}</p>`).join('')}
+      <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Close</button></div>`);
+    sheet.onclick = (ev) => ev.target.closest('[data-act="cancel"]') && closeSheet();
+  }
+
   // Commit the change (asking for the token first if this page doesn't have it), then update
   // the page and say what happened. `change` may be a function that prepares it, given a function
   // that updates the progress message.
@@ -337,7 +348,6 @@ export function createSelection({ button, root, getPhotos, getAlbums, repo, bran
         token = await askToken();
         if (!token) return;
       }
-      const setBusy = (text) => openSheet(`<p class="sheet-busy"><i class="spin" aria-hidden="true"></i>${esc(text)}</p>`);
       setBusy(busy);
       await commitChanges({ token, repo, branch, ...(typeof change === 'function' ? await change(setBusy) : change) });
       const message = done();
@@ -346,10 +356,124 @@ export function createSelection({ button, root, getPhotos, getAlbums, repo, bran
       showToast(message);
     } catch (e) {
       if (e?.status === 401) token = null; // ask again next time
-      openSheet(`<h3>Couldn't save the change</h3><p>${esc(reason(e))}</p>
-        <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Close</button></div>`);
-      sheet.onclick = (ev) => ev.target.closest('[data-act="cancel"]') && closeSheet();
+      showMessage("Couldn't save the change", [esc(reason(e))]);
     }
+  }
+
+  // ---------- Upload from this device (see upload.js) ----------
+  const picker = Object.assign(document.createElement('input'), { type: 'file', multiple: true, accept: ACCEPT, hidden: true });
+  const folderPicker = Object.assign(document.createElement('input'), { type: 'file', hidden: true });
+  folderPicker.webkitdirectory = true;
+  document.body.append(picker, folderPicker);
+  for (const input of [picker, folderPicker]) {
+    input.addEventListener('change', () => {
+      const files = pickedFiles(input);
+      input.value = '';
+      if (files.length) upload(files);
+    });
+  }
+  const canPickFolder = 'webkitdirectory' in folderPicker && !/iPhone|iPod|Android/.test(navigator.userAgent);
+  uploadButton.hidden = false;
+  uploadButton.addEventListener('click', chooseUpload);
+
+  function chooseUpload() {
+    openSheet(`<h3>Upload Photos &amp; Videos</h3>
+      <p>Photos, Live Photos and videos up to ${MAX_LABEL} are added to the library untouched.${canPickFolder ? ' You can also drag files or a folder onto the page.' : ''}</p>
+      <div class="sheet-stack">
+        <button type="button" class="sheet-btn sheet-primary" data-act="files">Choose Files…</button>
+        ${canPickFolder ? '<button type="button" class="sheet-btn" data-act="folder">Choose Folder…</button>' : ''}
+        <button type="button" class="sheet-btn" data-act="cancel">Cancel</button>
+      </div>`);
+    sheet.onclick = (e) => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'files') picker.click();
+      if (act === 'folder') folderPicker.click();
+      if (act === 'cancel') closeSheet();
+    };
+  }
+
+  // Dropping files or folders anywhere on the page uploads them.
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+  const dropping = (on) => document.documentElement.toggleAttribute('data-dropping', on);
+  let dragDepth = 0;
+  addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    dropping(true);
+  });
+  addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  addEventListener('dragleave', (e) => {
+    if (hasFiles(e) && --dragDepth <= 0) {
+      dragDepth = 0;
+      dropping(false);
+    }
+  });
+  addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    dropping(false);
+    upload(droppedFiles(e.dataTransfer));
+  });
+
+  const fileList = (list) => list.slice(0, 4).map(esc).join(', ') + (list.length > 4 ? `, and ${list.length - 4} more` : '');
+
+  // `files`: [{ file, path }], or a promise of them.
+  async function upload(files) {
+    if (!sheetWrap.hidden && sheet.querySelector('.sheet-busy')) return; // busy with something else
+    let plan;
+    try {
+      setBusy('Reading…');
+      const byId = new Map(getPhotos().map((p) => [p.id, p]));
+      plan = await planUpload(await files, byId, (i, n) => n > 3 && setBusy(`Reading ${i} of ${n}…`));
+    } catch (e) {
+      return showMessage("Couldn't read the files", [esc(e?.message || e)]);
+    }
+    const { items, dupes, unsupported, tooBig } = plan;
+    const notes = [
+      dupes.length && `Already in the library: <b>${itemsLabel(dupes).toLowerCase()}</b>${items.length ? ', left out' : ''}.`,
+      tooBig.length && `Larger than ${MAX_LABEL}, so they can't be uploaded from the browser (use the iPhone shortcut): ${fileList(tooBig)}.`,
+      unsupported.length && `Not photos or videos the site can show: ${fileList(unsupported)}.`,
+    ].filter(Boolean);
+    if (!items.length) return showMessage('Nothing to Upload', notes.length ? notes : ['No photos or videos found.']);
+
+    const albums = getAlbums().map((a) => a.name);
+    openSheet(`<h3>Upload ${itemsLabel(items)}</h3>
+      <p>${names(items)}</p>
+      ${notes.map((n) => `<p>${n}</p>`).join('')}
+      <form class="upload-form">
+        <input class="sheet-input" name="album" type="text" list="upload-albums" maxlength="80" placeholder="Add to album (optional)" autocomplete="off" enterkeyhint="go" aria-label="Album">
+        <datalist id="upload-albums">${albums.map((a) => `<option value="${esc(a)}">`).join('')}</datalist>
+        <div class="sheet-actions"><button type="button" class="sheet-btn" data-act="cancel">Cancel</button>
+          <button type="submit" class="sheet-btn sheet-primary">Upload</button></div>
+      </form>`);
+    sheet.onclick = (e) => e.target.closest('[data-act="cancel"]') && closeSheet();
+    sheet.querySelector('form').onsubmit = (e) => {
+      e.preventDefault();
+      const album = cleanAlbumName(e.target.elements.album.value);
+      const files = items.flatMap((it) => it.files);
+      const inAlbum = album ? ` to “${album}”` : '';
+      save('Uploading…', async (busy) => {
+        const put = [];
+        await inParallel(files, 3, async (f) => {
+          const bytes = new Uint8Array(await f.file.arrayBuffer());
+          put.push({ path: f.path, sha: await retry(() => uploadBlob({ token, repo, bytes })) });
+          busy(`Uploading ${put.length} of ${files.length}…`);
+        });
+        busy('Saving…');
+        // The new photos, and the ones already in the library, go into the album.
+        const add = album ? [...items, ...dupes].map((p) => ({ path: entryPath(album, p) })) : [];
+        return { put, add, message: `Add ${what(items)}${album ? ` to album “${album}”` : ''}` };
+      }, () => {
+        if (album && dupes.length) onAlbumChanged('add', album, dupes.map((p) => p.id));
+        return `Uploaded ${itemsLabel(items).toLowerCase()}${inAlbum}. ${items.length === 1 ? 'It appears' : 'They appear'} on the site in about a minute.`;
+      });
+    };
   }
 
   // A sign-in style form, so the device's password manager offers to save the token and fills it
@@ -406,6 +530,35 @@ export function createSelection({ button, root, getPhotos, getAlbums, repo, bran
     refresh: render,
     toast: showToast,
   };
+}
+
+/** Runs `fn` on every item of `list`, at most `n` at a time; stops at the first error. */
+async function inParallel(list, n, fn) {
+  let next = 0;
+  let failed = false;
+  await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => {
+    while (!failed && next < list.length) {
+      try {
+        await fn(list[next++]);
+      } catch (e) {
+        failed = true;
+        throw e;
+      }
+    }
+  }));
+}
+
+/** `fn()`, tried again (up to 3 times in all) when the connection or GitHub had a hiccup. */
+async function retry(fn) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const transient = e?.status === 0 || e?.status >= 500;
+      if (!transient || attempt >= 3) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * attempt));
+    }
+  }
 }
 
 const ALBUM_ADD = '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M8 4.5h10A1.5 1.5 0 0 1 19.5 6v10M5.5 7.5h9A1.5 1.5 0 0 1 16 9v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 18V9a1.5 1.5 0 0 1 1.5-1.5ZM10 10.5v6M7 13.5h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';

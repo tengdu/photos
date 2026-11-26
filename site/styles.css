@@ -82,6 +82,12 @@ button { font: inherit; color: inherit; }
 }
 .top-btn[hidden] { display: none; }
 html[data-selecting] .top-btn { background: var(--accent); color: #fff; }
+.top-icon {
+  flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--pill); cursor: pointer;
+}
+.top-icon[hidden], html[data-selecting] .top-icon { display: none; }
 
 /* ---------- Views ---------- */
 .view {
@@ -471,6 +477,19 @@ html[data-selecting] .tile.selected::after {
 .sheet-btn { flex: 1; height: 42px; border: 0; border-radius: 12px; background: var(--pill); font-size: 15px; font-weight: 600; cursor: pointer; }
 .sheet-danger { background: #ff3b30; color: #fff; }
 .sheet-primary { flex: none; padding: 0 18px; background: var(--accent); color: #fff; }
+.sheet-stack { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.sheet-stack .sheet-btn { flex: none; width: 100%; }
+.upload-form { margin-top: 14px; }
+/* Files dragged over the page (owner only): dropping them uploads them. */
+html[data-dropping]::after {
+  content: "Drop photos or a folder to upload";
+  position: fixed; inset: 10px; z-index: 30;
+  display: flex; align-items: center; justify-content: center;
+  border: 2.5px dashed var(--accent); border-radius: 18px;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  color: var(--fg); font-size: 19px; font-weight: 600;
+  pointer-events: none;
+}
 .sheet-input {
   display: block; width: 100%; height: 44px; margin: 4px 0 12px; padding: 0 12px;
   border: 0; border-radius: 12px; background: var(--pill); color: var(--fg);
